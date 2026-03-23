@@ -1,0 +1,18 @@
+# 帳號與憑證（絕對不進版控）
+config.py
+*.pfx
+*.p12
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+dist/
+build/
+
+# 系統
+.DS_Store
+Thumbs.db
