@@ -40,42 +40,31 @@
 
 ---
 
-## Phase 1 — 資料層驗證（先跑通，再做 UI）
+## Phase 1 — 資料層驗證 ✅ 完成（2026-03-23）
 
-> 目標：確認能從富邦 API 拿到正確資料，並驗算結果與 Excel 一致
+### Step 1.1：安裝與登入測試 ✅
+- SDK 從官網下載 wheel 安裝（PyPI 無此套件）
+- 登入成功：帳號蔣承哲 / 296612 / futopt
 
-### Step 1.1：安裝與登入測試
-```bash
-pip install fubon-neo
-```
-- 確認帳號 + 密碼 + .pfx 憑證路徑可成功登入
-- 確認 `sdk.init_realtime()` 不報錯
+### Step 1.2：取得近月 TXO 所有合約代碼 ✅
+- 近月結算日：2026-03-25，共 242 個合約（Call 121 + Put 121）
+- 符號格式：`TX429400C6`（C=買權）、`TX429400O6`（O=賣權，注意是 O 不是 P）
+- 履約價從名稱欄位取（name 含「買權」/「賣權」分辨 Call/Put）
+- **需要 2 條 WebSocket 連線**（242 > 200）
 
-### Step 1.2：取得近月 TXO 所有合約代碼
-- 呼叫 `intraday/tickers(type="OPTION", exchange="TAIFEX")`
-- 確認能列出所有近月 Call + Put 合約
-- 確認商品代碼格式（如 `TX4N03C32600`）
-- 確認 Call/Put 識別方式（代碼第幾碼是 C/P）
-- 確認履約價取法（後5碼？還是 API 直接給？）
-- **記錄共有幾個合約**（決定 WebSocket 需幾條連線，上限200/條）
+### Step 1.3：WebSocket 訂閱測試 ✅
+- 認證、訂閱成功
+- 訊息格式是**原始 JSON 字串**，需 `json.loads()` 解析
+- `total.tradeVolume` / `totalBidMatch` / `totalAskMatch` 欄位確認存在
+- `avgPrice`：只在交易時段有成交時才出現，盤後為空（待交易時段驗證）
+- SDK 在程式結束時有 Segfault，是 SDK 本身 bug，不影響功能
 
-### Step 1.3：WebSocket 訂閱測試
-- 訂閱少數幾個合約的 `trades` channel
-- **關鍵驗證**：確認推播資料包含以下欄位：
-  - `total.tradeVolume`（成交量）
-  - `total.totalBidMatch`（委買成交）
-  - `total.totalAskMatch`（委賣成交）
-  - `avgPrice`（均價/權利金）
-- 若上述欄位缺漏，改用 `quote` HTTP API 補齊（每5秒輪詢一次）
-
-### Step 1.4：計算驗算
-- 用幾個履約價的即時資料，手動計算淨CALL/PUT
-- 計算合併損益曲線，找出 Max Pain 點
-- 與 Excel 結果比對，確認數值一致
+### Step 1.4：計算驗算 ⏳ 待交易時段執行
+- 需在 08:45~13:45 執行，確認 avgPrice 出現並驗算淨CALL/PUT 數值
 
 ---
 
-## Phase 2 — 後端架構
+## Phase 2 — 後端架構 🔨 進行中
 
 ### Step 2.1：`config.py`
 ```python
