@@ -125,19 +125,25 @@ function updateTable(rows) {
     const key = r.strike;
     const prev = prevValues[key] || {};
     const changed = (f) => prev[f] !== r[f];
-    prevValues[key] = { net_call: r.net_call, vol_call: r.vol_call, ratio_call: r.ratio_call,
-                        net_put:  r.net_put,  vol_put:  r.vol_put,  ratio_put:  r.ratio_put };
+    prevValues[key] = { net_call: r.net_call, vol_call: r.vol_call, ratio_call: r.ratio_call, avg_price_call: r.avg_price_call, ask_match_call: r.ask_match_call, bid_match_call: r.bid_match_call,
+                        net_put:  r.net_put,  vol_put:  r.vol_put,  ratio_put:  r.ratio_put,  avg_price_put:  r.avg_price_put,  ask_match_put:  r.ask_match_put,  bid_match_put:  r.bid_match_put };
 
     row.innerHTML = `
       <div class="col-call-bar bar-wrapper">
         <div class="bar-call ${callCls}" style="width:${callPct}%"></div>
       </div>
       <div class="col-call-val${changed('net_call')   ? ' flash' : ''}">${callNetStr}</div>
+      <div class="col-call-avg${changed('avg_price_call') ? ' flash' : ''}">${r.avg_price_call > 0 ? r.avg_price_call.toFixed(1) : ''}</div>
+      <div class="col-call-buy${changed('ask_match_call') ? ' flash' : ''}">${r.ask_match_call > 0 ? r.ask_match_call : ''}</div>
+      <div class="col-call-sell${changed('bid_match_call') ? ' flash' : ''}">${r.bid_match_call > 0 ? r.bid_match_call : ''}</div>
       <div class="col-call-vol${changed('vol_call')   ? ' flash' : ''}">${callVolStr}</div>
       <div class="col-call-ratio${changed('ratio_call') ? ' flash' : ''}">${callRatioStr}</div>
       <div class="col-strike">${r.strike}</div>
       <div class="col-put-ratio${changed('ratio_put') ? ' flash' : ''}">${putRatioStr}</div>
       <div class="col-put-vol${changed('vol_put')     ? ' flash' : ''}">${putVolStr}</div>
+      <div class="col-put-sell${changed('bid_match_put') ? ' flash' : ''}">${r.bid_match_put > 0 ? r.bid_match_put : ''}</div>
+      <div class="col-put-buy${changed('ask_match_put') ? ' flash' : ''}">${r.ask_match_put > 0 ? r.ask_match_put : ''}</div>
+      <div class="col-put-avg${changed('avg_price_put') ? ' flash' : ''}">${r.avg_price_put > 0 ? r.avg_price_put.toFixed(1) : ''}</div>
       <div class="col-put-val${changed('net_put')     ? ' flash' : ''}">${putNetStr}</div>
       <div class="col-put-bar bar-wrapper">
         <div class="bar-put ${putCls}" style="width:${putPct}%"></div>

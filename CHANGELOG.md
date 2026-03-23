@@ -1,5 +1,22 @@
 # Changelog
 
+## v1.3 (2026-03-23)
+
+### 新增欄位（T 字報價表）
+- CALL / PUT 各新增「均價」欄（`avg_premium`，無成交時 fallback 前日收盤價），藍色顯示
+- CALL / PUT 各新增「買盤量」（nTBc，外盤，綠色）與「賣盤量」（nTAc，內盤，紅色）欄
+- 欄位順序：bar｜淨CALL｜均價｜買盤｜賣盤｜總量｜內外盤%｜履約價｜內外盤%｜總量｜賣盤｜買盤｜均價｜淨PUT｜bar
+
+### 後端
+- `calculator.py`：`build_strike_table` 新增 `avg_price_call`、`avg_price_put`、`ask_match_call`、`bid_match_call`、`ask_match_put`、`bid_match_put` 六個欄位
+
+### 前端
+- `static/index.html`：新增 6 個表頭欄位
+- `static/app.js`：渲染新欄位，閃爍偵測涵蓋所有新欄
+- `static/style.css`：新增欄位樣式，left-panel 寬度 580→860px
+
+---
+
 ## v1.2 (2026-03-23)
 
 ### 新增腳本

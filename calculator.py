@@ -187,6 +187,12 @@ def build_strike_table(
             "net_put":   p.net_position if p else 0,
             "vol_put":   p.trade_volume if p else 0,
             "ratio_put": round(p.inout_ratio, 1) if p else 50.0,
+            "avg_price_call": round(c.avg_premium, 2) if c else 0.0,
+            "ask_match_call": c.ask_match if c else 0,
+            "bid_match_call": c.bid_match if c else 0,
+            "avg_price_put":  round(p.avg_premium, 2) if p else 0.0,
+            "ask_match_put":  p.ask_match if p else 0,
+            "bid_match_put":  p.bid_match if p else 0,
             "highlight": strike == highlight_strike,
         })
     return rows
