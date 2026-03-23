@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>選擇權籌碼面板</title>
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<!-- ── 頂部工具列 ── -->
+<header id="toolbar">
+  <div class="toolbar-item">
+    <span class="label">結算日</span>
+    <span id="settlement-date">--</span>
+  </div>
+  <div class="toolbar-item">
+    <span class="label">資料時間</span>
+    <span id="last-updated">--</span>
+  </div>
+</header>
+
+<!-- ── 主體 ── -->
+<main id="main-body">
+
+  <!-- 左側：T字報價表 -->
+  <section id="left-panel">
+    <div id="table-header">
+      <div class="col-call-bar"></div>
+      <div class="col-call-val">淨CALL</div>
+      <div class="col-strike">履約價</div>
+      <div class="col-put-val">淨PUT</div>
+      <div class="col-put-bar"></div>
+    </div>
+    <div id="strike-table-body">
+      <!-- 由 app.js 動態填入 -->
+    </div>
+  </section>
+
+  <!-- 右側：損益曲線圖 -->
+  <section id="right-panel">
+    <div id="pnl-chart"></div>
+  </section>
+
+</main>
+
+<!-- ── 狀態監控角落 ── -->
+<div id="status-bar">
+  <span id="conn-dot" class="dot dot-gray"></span>
+  <span id="conn-label">連線中...</span>
+  &nbsp;｜&nbsp;
+  <span id="sub-count">--</span> 個合約
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

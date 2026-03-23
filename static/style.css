@@ -1,0 +1,161 @@
+/* ── 全局 reset & 字體 ── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  background: #0d1117;
+  color: #e6edf3;
+  font-family: 'Segoe UI', 'Noto Sans TC', sans-serif;
+  font-size: 13px;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* ── 頂部工具列 ── */
+#toolbar {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  padding: 8px 16px;
+  background: #161b22;
+  border-bottom: 1px solid #30363d;
+  flex-shrink: 0;
+}
+.toolbar-item { display: flex; align-items: center; gap: 6px; }
+.label { color: #8b949e; font-size: 12px; }
+#toolbar span:not(.label) { font-weight: 600; color: #58a6ff; }
+
+/* ── 主體左右分割 ── */
+#main-body {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+
+/* ── 左側：T字報價表 ── */
+#left-panel {
+  width: 420px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid #30363d;
+  overflow: hidden;
+}
+
+/* 表頭 */
+#table-header {
+  display: flex;
+  align-items: center;
+  padding: 4px 0;
+  background: #161b22;
+  border-bottom: 1px solid #30363d;
+  font-weight: 600;
+  color: #8b949e;
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
+/* 表格捲動區 */
+#strike-table-body {
+  flex: 1;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: #30363d transparent;
+}
+
+/* 欄寬定義（header 和 row 共用） */
+#table-header .col-call-bar,
+.row .col-call-bar  { width: 90px; }
+#table-header .col-call-val,
+.row .col-call-val  { width: 54px; text-align: right; padding-right: 4px; }
+#table-header .col-strike,
+.row .col-strike    { width: 72px; text-align: center; font-weight: 700; }
+#table-header .col-put-val,
+.row .col-put-val   { width: 54px; text-align: left; padding-left: 4px; }
+#table-header .col-put-bar,
+.row .col-put-bar   { width: 90px; }
+
+/* 每列 row */
+.row {
+  display: flex;
+  align-items: center;
+  height: 22px;
+  border-bottom: 1px solid #21262d;
+  transition: background 0.1s;
+}
+.row:hover { background: #1c2128; }
+.row.highlight {
+  background: #1a3a5c;
+  border-bottom-color: #388bfd;
+}
+.row.highlight .col-strike { color: #79c0ff; }
+
+/* 面積 bar（Call 向左、Put 向右） */
+.bar-wrapper {
+  position: relative;
+  width: 90px;
+  height: 100%;
+  display: flex;
+  align-items: center;
+}
+/* Call bar：從右往左填 */
+.bar-call {
+  position: absolute;
+  right: 0;
+  height: 14px;
+  border-radius: 2px 0 0 2px;
+  opacity: 0.75;
+}
+.bar-call.positive { background: #3fb950; }
+.bar-call.negative { background: #f85149; }
+/* Put bar：從左往右填 */
+.bar-put {
+  position: absolute;
+  left: 0;
+  height: 14px;
+  border-radius: 0 2px 2px 0;
+  opacity: 0.75;
+}
+.bar-put.positive { background: #3fb950; }
+.bar-put.negative { background: #f85149; }
+
+/* 數字 */
+.col-call-val, .col-put-val { font-size: 11px; color: #c9d1d9; }
+
+/* ── 右側：損益圖 ── */
+#right-panel {
+  flex: 1;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+}
+#pnl-chart {
+  flex: 1;
+  min-height: 0;
+}
+
+/* ── 狀態角落 ── */
+#status-bar {
+  position: fixed;
+  bottom: 8px;
+  right: 12px;
+  background: #161b22cc;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 11px;
+  color: #8b949e;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  backdrop-filter: blur(4px);
+}
+.dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+}
+.dot-green { background: #3fb950; box-shadow: 0 0 4px #3fb950; }
+.dot-red   { background: #f85149; }
+.dot-gray  { background: #484f58; }
