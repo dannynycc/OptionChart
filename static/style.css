@@ -72,9 +72,9 @@ body {
 #table-header .col-call-avg,
 .row .col-call-avg   { width: 50px; text-align: right; padding-right: 4px; color: #79c0ff; font-size: 11px; }
 #table-header .col-call-buy,
-.row .col-call-buy   { width: 44px; text-align: right; padding-right: 4px; color: #3fb950; font-size: 11px; }
+.row .col-call-buy   { width: 44px; text-align: right; padding-right: 4px; color: #f85149; font-size: 11px; }
 #table-header .col-call-sell,
-.row .col-call-sell  { width: 44px; text-align: right; padding-right: 4px; color: #f85149; font-size: 11px; }
+.row .col-call-sell  { width: 44px; text-align: right; padding-right: 4px; color: #3fb950; font-size: 11px; }
 #table-header .col-call-vol,
 .row .col-call-vol   { width: 44px; text-align: right; padding-right: 4px; color: #8b949e; }
 #table-header .col-call-ratio,
@@ -86,9 +86,9 @@ body {
 #table-header .col-put-vol,
 .row .col-put-vol    { width: 44px; text-align: left; padding-left: 4px; color: #8b949e; }
 #table-header .col-put-sell,
-.row .col-put-sell   { width: 44px; text-align: left; padding-left: 4px; color: #f85149; font-size: 11px; }
+.row .col-put-sell   { width: 44px; text-align: left; padding-left: 4px; color: #3fb950; font-size: 11px; }
 #table-header .col-put-buy,
-.row .col-put-buy    { width: 44px; text-align: left; padding-left: 4px; color: #3fb950; font-size: 11px; }
+.row .col-put-buy    { width: 44px; text-align: left; padding-left: 4px; color: #f85149; font-size: 11px; }
 #table-header .col-put-avg,
 .row .col-put-avg    { width: 50px; text-align: left; padding-left: 4px; color: #79c0ff; font-size: 11px; }
 #table-header .col-put-val,
