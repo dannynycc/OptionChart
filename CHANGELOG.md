@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.2 (2026-03-23)
+
+### 新增腳本
+- `start.bat`：Windows 一鍵啟動 WSL FastAPI server + Windows bridge
+- `stop.bat`：Windows 一鍵停止兩邊所有 Python process
+- `start_server.sh`：WSL 單獨啟動 FastAPI server（前台顯示 log）
+
+### 文件
+- 全面改寫 `HANDOFF.md`：包含架構圖、啟動流程、每週換倉說明、debug 指令、SKCOM 行為說明、已踩過的坑
+
 ## v1.1 (2026-03-23)
 
 ### 架構變更
