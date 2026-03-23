@@ -144,8 +144,43 @@ combined_pnl[x] = calculate_call_pnl(x, ...) + calculate_put_pnl(x, ...)
 | 均價 AvgPrice（權利金） | `avgPrice` |
 | 履約價 | symbol 後5碼，或 API name 欄位解析 |
 
-### 商品代碼格式
+### 商品代碼格式（實測確認）
 ```
-TX4N03C32600  → TXO 台指選擇權，近月，Call，履約價 32600
-TX4N03P32600  → TXO 台指選擇權，近月，Put，履約價 32600
+TX429400C6  → TX4（週選W4），履約價 29400，C=買權（Call），6=2026年
+TX429400O6  → TX4（週選W4），履約價 29400，O=賣權（Put），6=2026年
 ```
+- Call = 名稱含「買權」，符號含 `C`
+- Put  = 名稱含「賣權」，符號含 `O`（注意是 O 不是 P）
+- 近月合約共 242 個（Call 121 + Put 121），需 2 條 WebSocket 連線
+
+### 篩選近月合約方式
+```python
+# 1. 取所有 TXO tickers
+# 2. 找出最近的 settlementDate
+# 3. 篩選 settlementDate == 最近結算日
+# 4. 用 name 含「買權」/「賣權」區分 Call/Put
+```
+
+### HTTP quote API 回傳欄位（實測）
+```json
+{
+  "date": "2026-03-23",
+  "type": "OPTION",
+  "exchange": "TAIFEX",
+  "symbol": "TX429400C6",
+  "name": "臺指選擇權W4036;29400買權",
+  "previousClose": 4140,
+  "change": 0,
+  "changePercent": 0,
+  "amplitude": 0,
+  "total": {
+    "tradeVolume": 0,
+    "totalBidMatch": 0,
+    "totalAskMatch": 0,
+    "time": 1774226700199000
+  },
+  "serial": 18663543,
+  "lastUpdated": 1774244169192000
+}
+```
+注意：`avgPrice` 只在有成交時出現（交易時段），盤後不顯示。
