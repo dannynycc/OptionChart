@@ -56,6 +56,9 @@ window.addEventListener('resize', () => chart.resize());
 // ── 表格最大絕對值（用來計算 bar 寬度比例） ────────────
 let maxAbsNet = 1;
 
+// ── 前一次各欄數值（用於偵測變化 → 閃爍） ────────────
+const prevValues = {};  // key: `${strike}_C` / `${strike}_P` / etc.
+
 // ── 更新右側損益圖 ─────────────────────────────────────
 function updateChart(pnl, currentIndex) {
   if (!pnl || !pnl.strikes || pnl.strikes.length === 0) return;
@@ -111,13 +114,31 @@ function updateTable(rows) {
     const callCls = r.net_call >= 0 ? 'positive' : 'negative';
     const putCls  = r.net_put  >= 0 ? 'positive' : 'negative';
 
+    const callVolStr   = r.vol_call > 0 ? r.vol_call              : '';
+    const putVolStr    = r.vol_put  > 0 ? r.vol_put               : '';
+    const callRatioStr = r.vol_call > 0 ? r.ratio_call.toFixed(1) : '';
+    const putRatioStr  = r.vol_put  > 0 ? r.ratio_put.toFixed(1)  : '';
+    const callNetStr   = r.net_call !== 0 ? r.net_call.toFixed(0) : '';
+    const putNetStr    = r.net_put  !== 0 ? r.net_put.toFixed(0)  : '';
+
+    // 偵測各欄是否有變化
+    const key = r.strike;
+    const prev = prevValues[key] || {};
+    const changed = (f) => prev[f] !== r[f];
+    prevValues[key] = { net_call: r.net_call, vol_call: r.vol_call, ratio_call: r.ratio_call,
+                        net_put:  r.net_put,  vol_put:  r.vol_put,  ratio_put:  r.ratio_put };
+
     row.innerHTML = `
       <div class="col-call-bar bar-wrapper">
         <div class="bar-call ${callCls}" style="width:${callPct}%"></div>
       </div>
-      <div class="col-call-val">${r.net_call !== 0 ? r.net_call.toFixed(0) : ''}</div>
+      <div class="col-call-val${changed('net_call')   ? ' flash' : ''}">${callNetStr}</div>
+      <div class="col-call-vol${changed('vol_call')   ? ' flash' : ''}">${callVolStr}</div>
+      <div class="col-call-ratio${changed('ratio_call') ? ' flash' : ''}">${callRatioStr}</div>
       <div class="col-strike">${r.strike}</div>
-      <div class="col-put-val">${r.net_put !== 0 ? r.net_put.toFixed(0) : ''}</div>
+      <div class="col-put-ratio${changed('ratio_put') ? ' flash' : ''}">${putRatioStr}</div>
+      <div class="col-put-vol${changed('vol_put')     ? ' flash' : ''}">${putVolStr}</div>
+      <div class="col-put-val${changed('net_put')     ? ' flash' : ''}">${putNetStr}</div>
       <div class="col-put-bar bar-wrapper">
         <div class="bar-put ${putCls}" style="width:${putPct}%"></div>
       </div>
@@ -158,9 +179,43 @@ function updateStatus(status, settlement) {
   }
 }
 
+// ── 上次收到資料的時間戳 ────────────────────────────
+let lastDataTime = 0;
+let dataSource = '--';
+
+// ── 通用資料處理（WS + polling 共用） ────────────────
+function handleData(data, source) {
+  lastDataTime = Date.now();
+  dataSource = source || 'WS';
+  updateTable(data.table);
+  updateChart(data.pnl);
+  updateStatus(data.status, data.settlement);
+}
+
+// ── 每秒更新 browser-side "上次收到" 顯示 ────────────
+setInterval(() => {
+  const age = lastDataTime > 0 ? Math.round((Date.now() - lastDataTime) / 1000) : null;
+  const el = document.getElementById('rx-age');
+  if (el) {
+    if (age === null) {
+      el.textContent = '等待中...';
+      el.style.color = '#8b949e';
+    } else if (age < 5) {
+      el.textContent = `${dataSource} ${age}s前`;
+      el.style.color = '#3fb950';
+    } else {
+      el.textContent = `${dataSource} ${age}s前`;
+      el.style.color = '#f85149';
+    }
+  }
+}, 1000);
+
 // ── WebSocket 連線 ─────────────────────────────────────
+let _ws = null;
+
 function connect() {
   const ws = new WebSocket(`ws://${location.host}/ws`);
+  _ws = ws;
 
   ws.onopen = () => {
     console.log('WebSocket 已連線');
@@ -170,22 +225,39 @@ function connect() {
     let data;
     try { data = JSON.parse(event.data); }
     catch { return; }
-
-    updateTable(data.table);
-    updateChart(data.pnl);
-    updateStatus(data.status, data.settlement);
+    handleData(data, 'WS');
   };
 
   ws.onclose = () => {
-    console.log('WebSocket 斷線，3 秒後重連...');
+    console.log('WebSocket 斷線，1 秒後重連...');
     document.getElementById('conn-dot').className   = 'dot dot-red';
     document.getElementById('conn-label').textContent = '斷線中...';
-    setTimeout(connect, 3000);
+    _ws = null;
+    setTimeout(connect, 1000);
   };
 
   ws.onerror = (e) => {
     console.error('WebSocket 錯誤', e);
   };
 }
+
+// ── HTTP polling fallback（WS 超過 2 秒沒資料就主動拉） ──
+async function pollFallback() {
+  const now = Date.now();
+  const wsAlive = _ws && _ws.readyState === WebSocket.OPEN;
+  if (!wsAlive || (now - lastDataTime) > 2000) {
+    try {
+      const resp = await fetch('/api/data');
+      if (resp.ok) {
+        const data = await resp.json();
+        handleData(data, 'HTTP');
+      }
+    } catch(e) {
+      console.warn('polling fallback failed', e);
+    }
+  }
+}
+
+setInterval(pollFallback, 2000);
 
 connect();

@@ -35,7 +35,7 @@ body {
 
 /* ── 左側：T字報價表 ── */
 #left-panel {
-  width: 420px;
+  width: 580px;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
@@ -66,15 +66,23 @@ body {
 
 /* 欄寬定義（header 和 row 共用） */
 #table-header .col-call-bar,
-.row .col-call-bar  { width: 90px; }
+.row .col-call-bar   { width: 80px; }
 #table-header .col-call-val,
-.row .col-call-val  { width: 54px; text-align: right; padding-right: 4px; }
+.row .col-call-val   { width: 50px; text-align: right; padding-right: 4px; }
+#table-header .col-call-vol,
+.row .col-call-vol   { width: 44px; text-align: right; padding-right: 4px; color: #8b949e; }
+#table-header .col-call-ratio,
+.row .col-call-ratio { width: 56px; text-align: right; padding-right: 4px; color: #8b949e; }
 #table-header .col-strike,
-.row .col-strike    { width: 72px; text-align: center; font-weight: 700; }
+.row .col-strike     { width: 70px; text-align: center; font-weight: 700; }
+#table-header .col-put-ratio,
+.row .col-put-ratio  { width: 56px; text-align: left; padding-left: 4px; color: #8b949e; }
+#table-header .col-put-vol,
+.row .col-put-vol    { width: 44px; text-align: left; padding-left: 4px; color: #8b949e; }
 #table-header .col-put-val,
-.row .col-put-val   { width: 54px; text-align: left; padding-left: 4px; }
+.row .col-put-val    { width: 50px; text-align: left; padding-left: 4px; }
 #table-header .col-put-bar,
-.row .col-put-bar   { width: 90px; }
+.row .col-put-bar    { width: 80px; }
 
 /* 每列 row */
 .row {
@@ -94,7 +102,7 @@ body {
 /* 面積 bar（Call 向左、Put 向右） */
 .bar-wrapper {
   position: relative;
-  width: 90px;
+  width: 80px;
   height: 100%;
   display: flex;
   align-items: center;
@@ -122,6 +130,13 @@ body {
 
 /* 數字 */
 .col-call-val, .col-put-val { font-size: 11px; color: #c9d1d9; }
+
+/* 數值變化閃爍 */
+@keyframes flash-change {
+  0%   { outline: 1.5px solid #f0883e; background: rgba(240,136,62,0.25); }
+  100% { outline: none;               background: transparent; }
+}
+.flash { animation: flash-change 0.6s ease-out; }
 
 /* ── 右側：損益圖 ── */
 #right-panel {

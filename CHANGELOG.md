@@ -1,0 +1,38 @@
+# Changelog
+
+## v1.1 (2026-03-23)
+
+### 架構變更
+- 移除富邦 SDK 依賴，改用群益 SKCOM API（`skcom_bridge.py`）
+- Windows 端橋接：SKCOM DLL (ctypes) → HTTP POST → WSL FastAPI → WebSocket → Browser
+- 新增 `skcom_bridge.py`：Windows 原生 Python，透過 ctypes 直接呼叫 SKCOM.dll
+
+### 報價更新機制
+- 訂閱 `OnNotifyQuoteLONG` callback，有 bid/ask 變動時即時推送
+- 每 0.5 秒強制 `SKQuoteLib_RequestStocks` re-subscribe，確保夜盤成交量即時同步
+  - SKCOM 夜盤不為每筆成交觸發 callback，re-subscribe 強制 SKCOM 推送全量最新快照
+- 移除 per-symbol 輪詢（`GetStockByStockNo` poll），避免舊 cache 蓋掉新值
+
+### Bug Fixes
+- 修正 PUT 合約 callback 被 `market_no != 3` 過濾導致永不更新的問題
+- 修正 `_poll_worker` 每 5 秒輪詢 DLL cache 造成數值來回跳動的問題
+- 新增 zero-value 保護：夜盤 callback 送來 0 值時不覆蓋日盤已累計的量
+
+### 前端
+- 將 flash 動畫改為 per-cell 偵測（`prevValues` diff），只有實際變動的欄位才閃爍
+- 新增 HTTP polling fallback（WS 超過 2 秒無資料自動改用 `/api/data`）
+- 新增 WebSocket 斷線自動重連
+
+### 後端 (main.py)
+- `api_feed`：只有值真正改變才計入 `value_changed`，避免重複推送
+- `websocket_endpoint`：新增 `finally` 確保斷線時可靠清理 clients set
+- `_periodic_broadcast`：每 30 tick 印一次 heartbeat log
+
+### 刪除
+- `fetch_option_quote.py`、`fubon_client.py`、`phase1_test.py`（富邦 SDK 相關，已棄用）
+
+## v1.0
+
+- 初始版本，使用富邦 API 取得選擇權報價
+- FastAPI WebSocket 廣播，ECharts 損益曲線
+- T 字報價表（CALL/PUT 淨部位、總量、內外盤比）

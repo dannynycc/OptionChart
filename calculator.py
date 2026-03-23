@@ -25,19 +25,20 @@ class OptionData:
 
     @property
     def inout_ratio(self) -> float:
-        """內外盤比 (0~100)"""
+        """外盤比 (0~100)：外盤(nTBc=ask_match) 占總量比例，與 XQFAP 一致"""
         total = self.bid_match + self.ask_match
         if total == 0:
             return 50.0
-        return self.bid_match / total * 100
+        return self.ask_match / total * 100
 
     @property
     def net_position(self) -> float:
         """
-        淨CALL 或 淨PUT
-        公式：ROUND((InOutRatio - 50) / 50 * TotalVolume, 0)
+        淨CALL 或 淨PUT = nTAc - nTBc（內盤 - 外盤）
+        不依賴 trade_volume，因 trade_volume=nTQty 含開盤競價，
+        而 nTAc/nTBc 只累計方向性成交，兩者範圍不同。
         """
-        return round((self.inout_ratio - 50) / 50 * self.trade_volume, 0)
+        return float(self.bid_match - self.ask_match)
 
 
 def parse_strike(symbol: str, name: str) -> int:
@@ -166,7 +167,7 @@ def build_strike_table(
     put_map  = {p.strike: p for p in puts}
     all_strikes = sorted(
         set(list(call_map.keys()) + list(put_map.keys())),
-        reverse=True   # 高履約價在上
+        reverse=False  # 低履約價在上
     )
 
     # 找最接近 current_index 的履約價
@@ -179,9 +180,13 @@ def build_strike_table(
         c = call_map.get(strike)
         p = put_map.get(strike)
         rows.append({
-            "strike":   strike,
-            "net_call": c.net_position if c else 0,
-            "net_put":  p.net_position if p else 0,
+            "strike":    strike,
+            "net_call":  c.net_position if c else 0,
+            "vol_call":  c.trade_volume if c else 0,
+            "ratio_call": round(c.inout_ratio, 1) if c else 50.0,
+            "net_put":   p.net_position if p else 0,
+            "vol_put":   p.trade_volume if p else 0,
+            "ratio_put": round(p.inout_ratio, 1) if p else 50.0,
             "highlight": strike == highlight_strike,
         })
     return rows
