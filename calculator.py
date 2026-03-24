@@ -12,9 +12,12 @@ class OptionData:
     symbol: str
     strike: int
     side: str          # 'C' = Call, 'P' = Put
-    trade_volume: int = 0
+    trade_volume: int = 0     # 日+夜 合計
     bid_match: int = 0
     ask_match: int = 0
+    trade_volume_day: int = -1  # 純日盤；-1 = 未提供（群益橋接），回退用合計值
+    bid_match_day: int = -1
+    ask_match_day: int = -1
     avg_price: float = 0.0
     prev_close: float = 0.0  # 備用：盤後 avgPrice 為空時用前日收盤價
 
@@ -179,8 +182,23 @@ def build_strike_table(
     for strike in all_strikes:
         c = call_map.get(strike)
         p = put_map.get(strike)
+
+        # 日盤欄位（-1 代表未提供，回退用日+夜合計）
+        c_bid_day  = c.bid_match_day   if c and c.bid_match_day   >= 0 else (c.bid_match   if c else 0)
+        c_ask_day  = c.ask_match_day   if c and c.ask_match_day   >= 0 else (c.ask_match   if c else 0)
+        c_vol_day  = c.trade_volume_day if c and c.trade_volume_day >= 0 else (c.trade_volume if c else 0)
+        p_bid_day  = p.bid_match_day   if p and p.bid_match_day   >= 0 else (p.bid_match   if p else 0)
+        p_ask_day  = p.ask_match_day   if p and p.ask_match_day   >= 0 else (p.ask_match   if p else 0)
+        p_vol_day  = p.trade_volume_day if p and p.trade_volume_day >= 0 else (p.trade_volume if p else 0)
+
+        c_net_day   = float(c_bid_day - c_ask_day)
+        p_net_day   = float(p_bid_day - p_ask_day)
+        c_ratio_day = round(c_ask_day / (c_bid_day + c_ask_day) * 100, 1) if (c_bid_day + c_ask_day) > 0 else 50.0
+        p_ratio_day = round(p_ask_day / (p_bid_day + p_ask_day) * 100, 1) if (p_bid_day + p_ask_day) > 0 else 50.0
+
         rows.append({
             "strike":    strike,
+            # 日+夜 合計
             "net_call":  c.net_position if c else 0,
             "vol_call":  c.trade_volume if c else 0,
             "ratio_call": round(c.inout_ratio, 1) if c else 50.0,
@@ -193,6 +211,17 @@ def build_strike_table(
             "avg_price_put":  round(p.avg_premium, 2) if p else 0.0,
             "ask_match_put":  p.ask_match if p else 0,
             "bid_match_put":  p.bid_match if p else 0,
+            # 純日盤
+            "net_call_day":      c_net_day,
+            "vol_call_day":      c_vol_day,
+            "ratio_call_day":    c_ratio_day,
+            "ask_match_call_day": c_ask_day,
+            "bid_match_call_day": c_bid_day,
+            "net_put_day":       p_net_day,
+            "vol_put_day":       p_vol_day,
+            "ratio_put_day":     p_ratio_day,
+            "ask_match_put_day": p_ask_day,
+            "bid_match_put_day": p_bid_day,
             "highlight": strike == highlight_strike,
         })
     return rows

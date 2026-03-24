@@ -53,6 +53,18 @@ const chartOption = {
 chart.setOption(chartOption);
 window.addEventListener('resize', () => chart.resize());
 
+// ── 日盤 / 日+夜 切換 ─────────────────────────────────
+let showDayOnly = false;
+
+const sessionToggleBtn = document.getElementById('session-toggle');
+sessionToggleBtn.addEventListener('click', () => {
+  showDayOnly = !showDayOnly;
+  sessionToggleBtn.textContent = showDayOnly ? '日盤' : '日+夜';
+  sessionToggleBtn.classList.toggle('active', !showDayOnly);
+  // 用最近一次的 rows 重繪
+  if (window._lastRows) updateTable(window._lastRows);
+});
+
 // ── 表格最大絕對值（用來計算 bar 寬度比例） ────────────
 let maxAbsNet = 1;
 
@@ -91,64 +103,77 @@ function updateChart(pnl, currentIndex) {
   });
 }
 
+// ── DOM helper ────────────────────────────────────────
+function _cell(cls, text, flash) {
+  const d = document.createElement('div');
+  d.className = cls + (flash ? ' flash' : '');
+  d.textContent = text;
+  return d;
+}
+function _barCell(wrapCls, barCls, pct) {
+  const w = document.createElement('div');
+  w.className = wrapCls + ' bar-wrapper';
+  const b = document.createElement('div');
+  b.className = barCls;
+  b.style.width = pct + '%';
+  w.appendChild(b);
+  return w;
+}
+
 // ── 更新左側 T 字報價表 ────────────────────────────────
 function updateTable(rows) {
   if (!rows || rows.length === 0) return;
+  window._lastRows = rows;  // 供切換模式時重繪
+
+  // 依目前模式選欄位（日盤 / 日+夜）
+  const sfx = showDayOnly ? '_day' : '';
+  const gC = (r, f) => r[f + sfx] ?? r[f];
 
   // 找最大絕對值，供 bar 比例計算
   let newMax = 1;
   for (const r of rows) {
-    newMax = Math.max(newMax, Math.abs(r.net_call), Math.abs(r.net_put));
+    newMax = Math.max(newMax, Math.abs(gC(r, 'net_call')), Math.abs(gC(r, 'net_put')));
   }
   maxAbsNet = newMax;
 
   const body = document.getElementById('strike-table-body');
-  body.innerHTML = '';   // 清空後重建（簡單可靠）
+  body.textContent = '';   // 清空（比 innerHTML='' 更安全）
 
   for (const r of rows) {
+    const nc  = gC(r, 'net_call'),   np  = gC(r, 'net_put');
+    const vc  = gC(r, 'vol_call'),   vp  = gC(r, 'vol_put');
+    const rc_ = gC(r, 'ratio_call'), rp_ = gC(r, 'ratio_put');
+    const ac  = gC(r, 'ask_match_call'), bc = gC(r, 'bid_match_call');
+    const ap  = gC(r, 'ask_match_put'),  bp = gC(r, 'bid_match_put');
+
+    const callPct = (Math.abs(nc) / maxAbsNet * 100).toFixed(1);
+    const putPct  = (Math.abs(np) / maxAbsNet * 100).toFixed(1);
+
+    const key = r.strike + sfx;
+    const prev = prevValues[key] || {};
+    const ch = (v, k) => prev[k] !== v;
+    prevValues[key] = { nc, vc, rc_, avg_c: r.avg_price_call, ac, bc,
+                        np, vp, rp_, avg_p: r.avg_price_put,  ap, bp };
+
     const row = document.createElement('div');
     row.className = 'row' + (r.highlight ? ' highlight' : '');
 
-    const callPct = (Math.abs(r.net_call) / maxAbsNet * 100).toFixed(1);
-    const putPct  = (Math.abs(r.net_put)  / maxAbsNet * 100).toFixed(1);
-    const callCls = r.net_call >= 0 ? 'positive' : 'negative';
-    const putCls  = r.net_put  >= 0 ? 'positive' : 'negative';
+    row.appendChild(_barCell('col-call-bar', 'bar-call ' + (nc >= 0 ? 'positive' : 'negative'), callPct));
+    row.appendChild(_cell('col-call-val',   nc !== 0 ? nc.toFixed(0) : '',                ch(nc,  'nc')   ? ' flash' : ''));
+    row.appendChild(_cell('col-call-avg',   r.avg_price_call > 0 ? r.avg_price_call.toFixed(1) : '', ch(r.avg_price_call, 'avg_c') ? ' flash' : ''));
+    row.appendChild(_cell('col-call-buy',   ac > 0 ? String(ac) : '',                     ch(ac,  'ac')   ? ' flash' : ''));
+    row.appendChild(_cell('col-call-sell',  bc > 0 ? String(bc) : '',                     ch(bc,  'bc')   ? ' flash' : ''));
+    row.appendChild(_cell('col-call-vol',   vc > 0 ? String(vc) : '',                     ch(vc,  'vc')   ? ' flash' : ''));
+    row.appendChild(_cell('col-call-ratio', vc > 0 ? rc_.toFixed(1) : '',                 ch(rc_, 'rc_')  ? ' flash' : ''));
+    row.appendChild(_cell('col-strike',     String(r.strike),                              ''));
+    row.appendChild(_cell('col-put-ratio',  vp > 0 ? rp_.toFixed(1) : '',                 ch(rp_, 'rp_')  ? ' flash' : ''));
+    row.appendChild(_cell('col-put-vol',    vp > 0 ? String(vp) : '',                     ch(vp,  'vp')   ? ' flash' : ''));
+    row.appendChild(_cell('col-put-sell',   bp > 0 ? String(bp) : '',                     ch(bp,  'bp')   ? ' flash' : ''));
+    row.appendChild(_cell('col-put-buy',    ap > 0 ? String(ap) : '',                     ch(ap,  'ap')   ? ' flash' : ''));
+    row.appendChild(_cell('col-put-avg',    r.avg_price_put > 0 ? r.avg_price_put.toFixed(1) : '',  ch(r.avg_price_put, 'avg_p') ? ' flash' : ''));
+    row.appendChild(_cell('col-put-val',    np !== 0 ? np.toFixed(0) : '',                ch(np,  'np')   ? ' flash' : ''));
+    row.appendChild(_barCell('col-put-bar', 'bar-put '  + (np >= 0 ? 'positive' : 'negative'), putPct));
 
-    const callVolStr   = r.vol_call > 0 ? r.vol_call              : '';
-    const putVolStr    = r.vol_put  > 0 ? r.vol_put               : '';
-    const callRatioStr = r.vol_call > 0 ? r.ratio_call.toFixed(1) : '';
-    const putRatioStr  = r.vol_put  > 0 ? r.ratio_put.toFixed(1)  : '';
-    const callNetStr   = r.net_call !== 0 ? r.net_call.toFixed(0) : '';
-    const putNetStr    = r.net_put  !== 0 ? r.net_put.toFixed(0)  : '';
-
-    // 偵測各欄是否有變化
-    const key = r.strike;
-    const prev = prevValues[key] || {};
-    const changed = (f) => prev[f] !== r[f];
-    prevValues[key] = { net_call: r.net_call, vol_call: r.vol_call, ratio_call: r.ratio_call, avg_price_call: r.avg_price_call, ask_match_call: r.ask_match_call, bid_match_call: r.bid_match_call,
-                        net_put:  r.net_put,  vol_put:  r.vol_put,  ratio_put:  r.ratio_put,  avg_price_put:  r.avg_price_put,  ask_match_put:  r.ask_match_put,  bid_match_put:  r.bid_match_put };
-
-    row.innerHTML = `
-      <div class="col-call-bar bar-wrapper">
-        <div class="bar-call ${callCls}" style="width:${callPct}%"></div>
-      </div>
-      <div class="col-call-val${changed('net_call')   ? ' flash' : ''}">${callNetStr}</div>
-      <div class="col-call-avg${changed('avg_price_call') ? ' flash' : ''}">${r.avg_price_call > 0 ? r.avg_price_call.toFixed(1) : ''}</div>
-      <div class="col-call-buy${changed('ask_match_call') ? ' flash' : ''}">${r.ask_match_call > 0 ? r.ask_match_call : ''}</div>
-      <div class="col-call-sell${changed('bid_match_call') ? ' flash' : ''}">${r.bid_match_call > 0 ? r.bid_match_call : ''}</div>
-      <div class="col-call-vol${changed('vol_call')   ? ' flash' : ''}">${callVolStr}</div>
-      <div class="col-call-ratio${changed('ratio_call') ? ' flash' : ''}">${callRatioStr}</div>
-      <div class="col-strike">${r.strike}</div>
-      <div class="col-put-ratio${changed('ratio_put') ? ' flash' : ''}">${putRatioStr}</div>
-      <div class="col-put-vol${changed('vol_put')     ? ' flash' : ''}">${putVolStr}</div>
-      <div class="col-put-sell${changed('bid_match_put') ? ' flash' : ''}">${r.bid_match_put > 0 ? r.bid_match_put : ''}</div>
-      <div class="col-put-buy${changed('ask_match_put') ? ' flash' : ''}">${r.ask_match_put > 0 ? r.ask_match_put : ''}</div>
-      <div class="col-put-avg${changed('avg_price_put') ? ' flash' : ''}">${r.avg_price_put > 0 ? r.avg_price_put.toFixed(1) : ''}</div>
-      <div class="col-put-val${changed('net_put')     ? ' flash' : ''}">${putNetStr}</div>
-      <div class="col-put-bar bar-wrapper">
-        <div class="bar-put ${putCls}" style="width:${putPct}%"></div>
-      </div>
-    `;
     body.appendChild(row);
   }
 

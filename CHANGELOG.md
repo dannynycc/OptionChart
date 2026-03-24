@@ -1,5 +1,47 @@
 # Changelog
 
+## v2.1 (2026-03-24)
+
+### 夜盤基準值（afterhours baseline）— 修正日+夜合計成交量
+
+#### 問題
+富邦 aggregates WebSocket 只推送當前交易時段（日盤）的累計量，夜盤成交量不包含在內。
+導致網頁顯示的成交量只有日盤數值（例如 127），而非日+夜合計（例如 909）。
+
+#### 解法（fubon_feed.py）
+- 啟動時用 `ThreadPoolExecutor(max_workers=10)` 平行拉取所有合約夜盤基準：
+  `rc.quote(symbol=sym, session='afterhours').total`
+- 每次 WS 更新：`combined = 日盤值 + _baseline[symbol]`
+- 額外傳送純日盤欄位：`bid_match_day / ask_match_day / trade_volume_day`
+
+### 日盤 / 日+夜 切換按鈕
+
+- 工具列新增「日+夜」按鈕（預設），點擊切換為「日盤」
+- `FeedItem`（main.py）新增 `bid_match_day`, `ask_match_day`, `trade_volume_day`（預設 -1 哨兵）
+- `OptionData`（calculator.py）對應新增 3 個 `_day` 欄位；`build_strike_table` 回傳 `*_day`
+- 群益橋接未提供 `_day` 時（-1），前後端自動回退用日+夜合計值
+- `app.js`：`gC(row, field)` 依模式取 `field_day` 或 `field`；快取 `window._lastRows` 供切換重繪
+
+### start.bat：背景無視窗啟動
+- 改用 `PowerShell Start-Process -WindowStyle Hidden`
+- server 與 feed 均以隱藏視窗後台執行，不會跳出 cmd 視窗
+
+### 前端安全性（XSS 防護）
+- `app.js updateTable` 改用 `document.createElement` + `textContent`，移除所有 innerHTML 模板字串拼接
+
+### 檔案重命名
+- `capital_bridge.py` → `capital_feed.py`
+- `fubon_bridge.py` → `fubon_feed.py`
+
+### 刪除 legacy 檔案
+- `capital_bridge.py`, `config_bridge_template.py`, `list_exports.py`, `setup_libs.py`, `start_server.sh`, `HANDOFF.md`
+
+### 新增
+- `config_capital_template.py`：群益設定範本
+- `config_fubon_template.py`：富邦設定範本
+
+---
+
 ## v1.5 (2026-03-24)
 
 ### 架構重構：移除 WSL 依賴，全面搬移至 Windows 本機

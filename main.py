@@ -95,7 +95,7 @@ async def _periodic_broadcast():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     task = asyncio.create_task(_periodic_broadcast())
-    logger.info("Bridge 模式：等待 Windows skcom_bridge.py 推送資料...")
+    logger.info("OptionChart server 啟動，等待 capital_feed.py / fubon_feed.py 推送資料...")
     yield
     task.cancel()
     logger.info("關閉中...")
@@ -139,11 +139,14 @@ async def api_init(payload: InitPayload):
 # ── Bridge 端點：/api/feed ────────────────────────────────────
 
 class FeedItem(BaseModel):
-    symbol:       str
-    bid_match:    int    # 內盤累計口數（nTAc）
-    ask_match:    int    # 外盤累計口數（nTBc）
-    trade_volume: int
-    avg_price:    float = 0.0
+    symbol:           str
+    bid_match:        int    # 內盤累計口數（日+夜合計）
+    ask_match:        int    # 外盤累計口數（日+夜合計）
+    trade_volume:     int
+    avg_price:        float = 0.0
+    bid_match_day:    int = -1   # 純日盤；-1 = 未提供（群益橋接不送此欄）
+    ask_match_day:    int = -1
+    trade_volume_day: int = -1
 
 @app.post("/api/feed")
 async def api_feed(updates: list[FeedItem]):
@@ -168,6 +171,11 @@ async def api_feed(updates: list[FeedItem]):
                 opt.ask_match    = new_ask
                 opt.trade_volume = new_vol
                 value_changed += 1
+            # 純日盤欄位（富邦橋接才有，-1 = 未提供）
+            if u.bid_match_day >= 0:
+                opt.bid_match_day    = u.bid_match_day
+                opt.ask_match_day    = u.ask_match_day
+                opt.trade_volume_day = u.trade_volume_day
             if u.avg_price > 0:
                 opt.avg_price = u.avg_price
     logger.info(
