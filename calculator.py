@@ -124,9 +124,10 @@ def calc_combined_pnl(
 
 def _calc_call_pnl(settlement: int, calls: list[OptionData]) -> float:
     """
-    CALL 買方總損益（億元）
+    CALL 全市場淨損益（億元）
     Σ[ max(settlement - strike, 0) - avgPremium ] × netPosition
     × 50 / 1億
+    netPosition = bid_match - ask_match（今日淨方向性流量）
     """
     total = 0.0
     for c in calls:
@@ -138,9 +139,10 @@ def _calc_call_pnl(settlement: int, calls: list[OptionData]) -> float:
 
 def _calc_put_pnl(settlement: int, puts: list[OptionData]) -> float:
     """
-    PUT 買方總損益（億元）
+    PUT 全市場淨損益（億元）
     Σ[ max(strike - settlement, 0) - avgPremium ] × netPosition
     × 50 / 1億
+    netPosition = bid_match - ask_match（今日淨方向性流量）
     """
     total = 0.0
     for p in puts:
@@ -196,6 +198,10 @@ def build_strike_table(
         c_ratio_day = round(c_ask_day / (c_bid_day + c_ask_day) * 100, 1) if (c_bid_day + c_ask_day) > 0 else 50.0
         p_ratio_day = round(p_ask_day / (p_bid_day + p_ask_day) * 100, 1) if (p_bid_day + p_ask_day) > 0 else 50.0
 
+        call_pnl     = _calc_call_pnl(strike, calls)
+        put_pnl      = _calc_put_pnl(strike, puts)
+        combined_pnl = call_pnl + put_pnl
+
         rows.append({
             "strike":    strike,
             # 日+夜 合計
@@ -225,5 +231,9 @@ def build_strike_table(
             "ask_match_put_day": p_ask_day,
             "bid_match_put_day": p_bid_day,
             "highlight": strike == highlight_strike,
+            # 損益驗證欄（假設結算於此履約價時的全市場淨損益）
+            "pnl_call":     round(call_pnl,     4),
+            "pnl_put":      round(put_pnl,      4),
+            "pnl_combined": round(combined_pnl, 4),
         })
     return rows

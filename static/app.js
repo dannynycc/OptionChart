@@ -7,51 +7,132 @@
 const chartDom = document.getElementById('pnl-chart');
 const chart    = echarts.init(chartDom, 'dark');
 
+// 全域：供插值 + hover 使用
+let _chartStrikes = [];
+let _chartPnl     = [];   // 單位：萬元
+
+function _interpolate(x) {
+  if (_chartStrikes.length === 0) return null;
+  if (x <= _chartStrikes[0])                        return _chartPnl[0];
+  if (x >= _chartStrikes[_chartStrikes.length - 1]) return _chartPnl[_chartPnl.length - 1];
+  for (let i = 0; i < _chartStrikes.length - 1; i++) {
+    if (x >= _chartStrikes[i] && x <= _chartStrikes[i + 1]) {
+      const t = (x - _chartStrikes[i]) / (_chartStrikes[i + 1] - _chartStrikes[i]);
+      return _chartPnl[i] + t * (_chartPnl[i + 1] - _chartPnl[i]);
+    }
+  }
+  return null;
+}
+
+const _GRID = { top: 40, right: 20, bottom: 50, left: 75 };
+
 const chartOption = {
   backgroundColor: 'transparent',
-  tooltip: {
-    trigger: 'axis',
-    formatter: (params) => {
-      const p = params[0];
-      return `履約價 ${p.axisValue}<br/>合併損益：${p.data.toFixed(4)} 億元`;
-    }
-  },
-  grid: { top: 40, right: 20, bottom: 60, left: 70 },
+  tooltip: { show: false },
+  grid: _GRID,
   xAxis: {
-    type: 'category',
-    data: [],
-    name: '履約價',
-    nameLocation: 'center',
-    nameGap: 40,
-    axisLabel: { color: '#8b949e', fontSize: 11, rotate: 45 },
-    axisLine: { lineStyle: { color: '#30363d' } },
+    type: 'value',
+    name: '履約價', nameLocation: 'center', nameGap: 35,
+    axisLabel: { color: '#8b949e', fontSize: 11, formatter: v => Math.round(v) },
+    axisLine:  { lineStyle: { color: '#30363d' } },
+    splitLine: { show: false },
+    minInterval: 50,
   },
   yAxis: {
     type: 'value',
-    name: '損益（億元）',
-    nameLocation: 'middle',
-    nameGap: 55,
-    axisLabel: { color: '#8b949e', fontSize: 11,
-                 formatter: v => v.toFixed(2) },
-    axisLine: { lineStyle: { color: '#30363d' } },
-    splitLine: { lineStyle: { color: '#21262d' } },
+    name: '損益（萬元）', nameLocation: 'middle', nameGap: 60,
+    axisLabel:  { color: '#8b949e', fontSize: 11, formatter: v => v.toFixed(0) },
+    axisLine:   { lineStyle: { color: '#30363d' } },
+    splitLine:  { lineStyle: { color: '#21262d' } },
   },
   series: [
-    {
-      name: '合併損益',
-      type: 'line',
-      data: [],
-      smooth: true,
+    {   // X軸以上：紅色面積
+      name: '_pos', type: 'line', data: [], smooth: true,
       symbol: 'none',
+      lineStyle: { width: 0, opacity: 0 },
+      areaStyle: { color: 'rgba(248,81,73,0.22)', origin: 0 },
+      silent: true, animation: false, z: 1,
+    },
+    {   // X軸以下：綠色面積
+      name: '_neg', type: 'line', data: [], smooth: true,
+      symbol: 'none',
+      lineStyle: { width: 0, opacity: 0 },
+      areaStyle: { color: 'rgba(63,185,80,0.22)', origin: 0 },
+      silent: true, animation: false, z: 1,
+    },
+    {   // 主折線 + 藍色空心圓點
+      name: '合併損益', type: 'line', data: [], smooth: true,
+      symbol: 'circle', symbolSize: 6, showSymbol: true,
       lineStyle: { color: '#388bfd', width: 2 },
-      areaStyle: { color: 'rgba(248,81,73,0.15)' },
-    }
+      itemStyle: { color: 'transparent', borderColor: '#388bfd', borderWidth: 1.5 },
+      animation: false, z: 3,
+    },
   ],
-  // 標注線（Max Pain / 目前指數）動態加入
   graphic: [],
 };
 chart.setOption(chartOption);
 window.addEventListener('resize', () => chart.resize());
+
+// ── Hover：插值 + 十字準星 + 實心圓點 + Tooltip ────────
+let _hoverRaf = false;
+
+function _clearHover() {
+  chart.setOption({ graphic: [] }, { replaceMerge: ['graphic'] });
+}
+
+chart.getZr().on('mousemove', function(e) {
+  if (_hoverRaf) return;
+  _hoverRaf = true;
+  requestAnimationFrame(() => { _hoverRaf = false; });
+
+  const px = [e.offsetX, e.offsetY];
+  if (!chart.containPixel('grid', px) || _chartStrikes.length === 0) {
+    _clearHover(); return;
+  }
+
+  const [hx] = chart.convertFromPixel({ seriesIndex: 2 }, px);
+  const hy   = _interpolate(hx);
+  if (hy === null) { _clearHover(); return; }
+
+  const dot   = chart.convertToPixel({ seriesIndex: 2 }, [hx, hy]);
+  const gBot  = chartDom.offsetHeight - _GRID.bottom;
+  const gLeft = _GRID.left;
+
+  const isPos  = hy >= 0;
+  const color  = isPos ? '#f85149' : '#3fb950';
+  const sign   = isPos ? '+' : '';
+  const label1 = `結算 ${Math.round(hx)}`;
+  const label2 = `${sign}${hy.toFixed(1)}萬`;
+
+  const ttW = 115, ttH = 44;
+  let ttX = dot[0] + 12;
+  let ttY = dot[1] - ttH - 6;
+  if (ttX + ttW > chartDom.offsetWidth - _GRID.right) ttX = dot[0] - ttW - 12;
+  if (ttY < _GRID.top) ttY = dot[1] + 8;
+
+  chart.setOption({ graphic: [
+    { id: '_vl',   type: 'line',   z: 5, silent: true,
+      shape: { x1: dot[0], y1: dot[1], x2: dot[0], y2: gBot },
+      style: { stroke: '#58a6ff', lineWidth: 1, lineDash: [4, 4] } },
+    { id: '_hl',   type: 'line',   z: 5, silent: true,
+      shape: { x1: gLeft, y1: dot[1], x2: dot[0], y2: dot[1] },
+      style: { stroke: '#58a6ff', lineWidth: 1, lineDash: [4, 4] } },
+    { id: '_dot',  type: 'circle', z: 10, silent: true,
+      shape: { cx: dot[0], cy: dot[1], r: 5 },
+      style: { fill: '#388bfd' } },
+    { id: '_ttbg', type: 'rect',   z: 8, silent: true,
+      shape: { x: ttX, y: ttY, width: ttW, height: ttH, r: 4 },
+      style: { fill: '#1c2128ee', stroke: '#30363d', lineWidth: 1 } },
+    { id: '_tt1',  type: 'text',   z: 9, silent: true,
+      x: ttX + 8, y: ttY + 7,
+      style: { text: label1, fill: '#c9d1d9', fontSize: 11 } },
+    { id: '_tt2',  type: 'text',   z: 9, silent: true,
+      x: ttX + 8, y: ttY + 24,
+      style: { text: label2, fill: color, fontSize: 12, fontWeight: 'bold' } },
+  ]}, { replaceMerge: ['graphic'] });
+});
+
+chart.getZr().on('mouseout', _clearHover);
 
 // ── 日盤 / 日+夜 切換 ─────────────────────────────────
 let showDayOnly = false;
@@ -71,36 +152,80 @@ let maxAbsNet = 1;
 // ── 前一次各欄數值（用於偵測變化 → 閃爍） ────────────
 const prevValues = {};  // key: `${strike}_C` / `${strike}_P` / etc.
 
+// ── noUiSlider 初始化 / 更新 ──────────────────────────
+let _nouiSlider  = null;
+let _sliderMin   = 0, _sliderMax = 0;
+
+function _initSlider(minS, maxS) {
+  const el = document.getElementById('range-slider');
+  if (_nouiSlider) {
+    if (minS === _sliderMin && maxS === _sliderMax) return;
+    _nouiSlider.updateOptions({ range: { min: minS, max: maxS } }, true);
+    _nouiSlider.set([minS, maxS]);
+  } else {
+    _nouiSlider = noUiSlider.create(el, {
+      start:   [minS, maxS],
+      connect: true,
+      step:    50,
+      range:   { min: minS, max: maxS },
+      tooltips: [
+        { to: v => String(Math.round(v)) },
+        { to: v => String(Math.round(v)) },
+      ],
+      format: { to: v => Math.round(v), from: v => Number(v) },
+    });
+    let _sliderRaf = null;
+    _nouiSlider.on('update', (values) => {
+      if (_sliderRaf) cancelAnimationFrame(_sliderRaf);
+      _sliderRaf = requestAnimationFrame(() => {
+        _sliderRaf = null;
+        const xMin = Number(values[0]);
+        const xMax = Number(values[1]);
+
+        // 計算可見範圍內的 Y 極值（含邊界插值點）
+        const vis = [];
+        for (let i = 0; i < _chartStrikes.length; i++) {
+          if (_chartStrikes[i] >= xMin && _chartStrikes[i] <= xMax)
+            vis.push(_chartPnl[i]);
+        }
+        const yL = _interpolate(xMin), yR = _interpolate(xMax);
+        if (yL !== null) vis.push(yL);
+        if (yR !== null) vis.push(yR);
+
+        let yMin = Math.min(...vis), yMax = Math.max(...vis);
+        const pad = (yMax - yMin) * 0.12 || 10;
+        yMin -= pad;  yMax += pad;
+
+        chart.setOption({
+          xAxis: { min: xMin, max: xMax },
+          yAxis: { min: yMin, max: yMax },
+        }, { notMerge: false, lazyUpdate: false });
+      });
+    });
+  }
+  _sliderMin = minS;
+  _sliderMax = maxS;
+}
+
 // ── 更新右側損益圖 ─────────────────────────────────────
-function updateChart(pnl, currentIndex) {
+function updateChart(pnl) {
   if (!pnl || !pnl.strikes || pnl.strikes.length === 0) return;
 
-  const markLines = [];
+  _chartStrikes = pnl.strikes;
+  _chartPnl     = pnl.pnl.map(v => Math.round(v * 10000 * 10) / 10);  // 億→萬，1位小數
+  _initSlider(Math.min(..._chartStrikes), Math.max(..._chartStrikes));
 
-  if (pnl.max_pain != null) {
-    markLines.push({
-      xAxis: String(pnl.max_pain),
-      label: { formatter: `Max Pain\n${pnl.max_pain}`, color: '#f0883e' },
-      lineStyle: { color: '#f0883e', type: 'dashed', width: 1.5 },
-    });
-  }
-  if (currentIndex != null) {
-    markLines.push({
-      xAxis: String(currentIndex),
-      label: { formatter: `現價\n${currentIndex}`, color: '#79c0ff' },
-      lineStyle: { color: '#79c0ff', type: 'solid', width: 1.5 },
-    });
-  }
+  const posData  = _chartStrikes.map((s, i) => [s, Math.max(_chartPnl[i], 0)]);
+  const negData  = _chartStrikes.map((s, i) => [s, Math.min(_chartPnl[i], 0)]);
+  const mainData = _chartStrikes.map((s, i) => [s, _chartPnl[i]]);
 
   chart.setOption({
-    xAxis: { data: pnl.strikes.map(String) },
-    series: [{
-      data: pnl.pnl,
-      markLine: markLines.length > 0
-        ? { silent: true, symbol: 'none', data: markLines }
-        : undefined,
-    }],
-  });
+    series: [
+      { name: '_pos',    data: posData  },
+      { name: '_neg',    data: negData  },
+      { name: '合併損益', data: mainData },
+    ],
+  }, false);
 }
 
 // ── DOM helper ────────────────────────────────────────
@@ -185,6 +310,9 @@ function updateTable(rows) {
     row.appendChild(_cell('col-put-vol',    vp > 0 ? String(vp) : '',                     ch(vp,  'vp')   ? ' flash' : ''));
     row.appendChild(_cell('col-put-ratio',  vp > 0 ? rp_.toFixed(1) : '',                 ch(rp_, 'rp_')  ? ' flash' : ''));
     row.appendChild(_cell('col-put-avg',    r.avg_price_put > 0 ? r.avg_price_put.toFixed(1) : '',  ch(r.avg_price_put, 'avg_p') ? ' flash' : ''));
+    row.appendChild(_cell('col-pnl-call',     r.pnl_call     != null ? r.pnl_call.toFixed(4)     : '', ''));
+    row.appendChild(_cell('col-pnl-put',      r.pnl_put      != null ? r.pnl_put.toFixed(4)      : '', ''));
+    row.appendChild(_cell('col-pnl-combined', r.pnl_combined != null ? r.pnl_combined.toFixed(4) : '', ''));
 
     body.appendChild(row);
   }
@@ -304,3 +432,33 @@ async function pollFallback() {
 setInterval(pollFallback, 2000);
 
 connect();
+
+// ── 左側面板拖拉調整寬度 ─────────────────────────────
+const _leftPanel    = document.getElementById('left-panel');
+const _resizeHandle = document.getElementById('resize-handle');
+let _isResizing = false, _resizeStartX = 0, _resizeStartW = 0;
+
+_resizeHandle.addEventListener('mousedown', e => {
+  _isResizing   = true;
+  _resizeStartX = e.clientX;
+  _resizeStartW = _leftPanel.offsetWidth;
+  _resizeHandle.classList.add('dragging');
+  document.body.style.cursor     = 'col-resize';
+  document.body.style.userSelect = 'none';
+  e.preventDefault();
+});
+
+document.addEventListener('mousemove', e => {
+  if (!_isResizing) return;
+  const newW = Math.max(200, _resizeStartW + e.clientX - _resizeStartX);
+  _leftPanel.style.width = newW + 'px';
+});
+
+document.addEventListener('mouseup', () => {
+  if (!_isResizing) return;
+  _isResizing = false;
+  _resizeHandle.classList.remove('dragging');
+  document.body.style.cursor     = '';
+  document.body.style.userSelect = '';
+  chart.resize();
+});

@@ -38,15 +38,40 @@ body {
   overflow: hidden;
 }
 
+/* ── 左右拖拉分隔線 ── */
+#resize-handle {
+  width: 5px;
+  background: #30363d;
+  cursor: col-resize;
+  flex-shrink: 0;
+  transition: background 0.15s;
+}
+#resize-handle:hover, #resize-handle.dragging { background: #58a6ff; }
+
 /* ── 左側：T字報價表 ── */
 #left-panel {
-  width: 880px;
+  width: 900px;
+  min-width: 200px;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  border-right: 1px solid #30363d;
   overflow: hidden;
 }
+
+/* T字表水平捲動包裹層 */
+#table-scroll {
+  flex: 1;
+  overflow-x: auto;
+  overflow-y: hidden;
+  display: flex;
+  flex-direction: column;
+  scrollbar-width: thin;
+  scrollbar-color: #30363d transparent;
+  min-height: 0;
+}
+
+/* 所有欄位禁止縮小，確保水平捲動生效 */
+[class*="col-"] { flex-shrink: 0; }
 
 /* 表頭 */
 #table-header {
@@ -65,7 +90,10 @@ body {
 #table-header .col-call-buy,
 #table-header .col-call-sell,
 #table-header .col-put-buy,
-#table-header .col-put-sell {
+#table-header .col-put-sell,
+#table-header .col-pnl-call,
+#table-header .col-pnl-put,
+#table-header .col-pnl-combined {
   white-space: normal;
   font-size: 9px;
   line-height: 1.25;
@@ -75,6 +103,7 @@ body {
 #strike-table-body {
   flex: 1;
   overflow-y: auto;
+  overflow-x: visible;
   scrollbar-width: thin;
   scrollbar-color: #30363d transparent;
 }
@@ -110,6 +139,12 @@ body {
 .row .col-put-val    { width: 50px; text-align: left; padding-left: 4px; }
 #table-header .col-put-bar,
 .row .col-put-bar    { width: 80px; }
+#table-header .col-pnl-call,
+.row .col-pnl-call      { width: 60px; text-align: right; padding-right: 4px; color: #79c0ff; font-size: 11px; }
+#table-header .col-pnl-put,
+.row .col-pnl-put       { width: 60px; text-align: right; padding-right: 4px; color: #79c0ff; font-size: 11px; }
+#table-header .col-pnl-combined,
+.row .col-pnl-combined  { width: 65px; text-align: right; padding-right: 8px; color: #f0883e; font-size: 11px; }
 
 /* 每列 row */
 .row {
@@ -183,30 +218,64 @@ body {
 /* ── 右側：損益圖 ── */
 #right-panel {
   flex: 1;
-  padding: 12px;
+  padding: 12px 12px 8px;
   display: flex;
   flex-direction: column;
+  gap: 6px;
+  min-width: 0;
 }
 #pnl-chart {
   flex: 1;
   min-height: 0;
 }
 
-/* ── 狀態角落 ── */
-#status-bar {
-  position: fixed;
-  bottom: 8px;
-  right: 12px;
-  background: #161b22cc;
+/* ── noUiSlider 容器 ── */
+#range-slider-wrap {
+  padding: 12px 20px 4px;
+  flex-shrink: 0;
+}
+
+/* ── noUiSlider 暗色主題覆寫 ── */
+.noUi-target {
+  background: #21262d;
   border: 1px solid #30363d;
-  border-radius: 6px;
-  padding: 4px 10px;
+  border-radius: 4px;
+  box-shadow: none;
+  height: 6px;
+}
+.noUi-connect { background: #388bfd; }
+.noUi-handle {
+  background: #58a6ff;
+  border: 2px solid #1a3a6e;
+  border-radius: 50%;
+  box-shadow: 0 0 6px rgba(56,139,253,0.5);
+  cursor: grab;
+  width: 18px !important;
+  height: 18px !important;
+  top: -7px !important;
+  right: -9px !important;
+}
+.noUi-handle:active  { cursor: grabbing; background: #79c0ff; }
+.noUi-handle::before,
+.noUi-handle::after  { display: none; }
+.noUi-tooltip {
+  background: #1c2128;
+  border: 1px solid #30363d;
+  color: #c9d1d9;
+  font-size: 11px;
+  padding: 2px 7px;
+  border-radius: 3px;
+  bottom: 160%;
+}
+
+/* ── 狀態列（工具列右側） ── */
+#status-bar {
+  margin-left: auto;
   font-size: 11px;
   color: #8b949e;
   display: flex;
   align-items: center;
   gap: 4px;
-  backdrop-filter: blur(4px);
 }
 .dot {
   width: 8px; height: 8px;

@@ -5,6 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>選擇權籌碼面板</title>
   <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/nouislider@15/dist/nouislider.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/nouislider@15/dist/nouislider.min.js"></script>
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
@@ -22,6 +24,15 @@
   <div class="toolbar-item">
     <button id="session-toggle" class="toggle-btn active" title="切換日盤 / 日+夜盤">日+夜</button>
   </div>
+  <!-- 狀態列移到工具列右側 -->
+  <div id="status-bar">
+    <span id="conn-dot" class="dot dot-gray"></span>
+    <span id="conn-label">連線中...</span>
+    &nbsp;｜&nbsp;
+    <span id="sub-count">--</span> 個合約
+    &nbsp;｜&nbsp;
+    <span id="rx-age">等待中...</span>
+  </div>
 </header>
 
 <!-- ── 主體 ── -->
@@ -29,44 +40,45 @@
 
   <!-- 左側：T字報價表 -->
   <section id="left-panel">
-    <div id="table-header">
-      <div class="col-call-sell">外盤成交量(Buy Call)</div>
-      <div class="col-call-buy">內盤成交量(Sell Call)</div>
-      <div class="col-call-vol">成交量</div>
-      <div class="col-call-ratio">內外盤%</div>
-      <div class="col-call-avg">均價</div>
-      <div class="col-call-val">淨CALL</div>
-      <div class="col-call-bar"></div>
-      <div class="col-strike">履約價</div>
-      <div class="col-put-bar"></div>
-      <div class="col-put-val">淨PUT</div>
-      <div class="col-put-sell">外盤成交量(Buy Put)</div>
-      <div class="col-put-buy">內盤成交量(Sell Put)</div>
-      <div class="col-put-vol">成交量</div>
-      <div class="col-put-ratio">內外盤%</div>
-      <div class="col-put-avg">均價</div>
-    </div>
-    <div id="strike-table-body">
-      <!-- 由 app.js 動態填入 -->
+    <div id="table-scroll">
+      <div id="table-header">
+        <div class="col-call-sell">外盤成交量(Buy Call)</div>
+        <div class="col-call-buy">內盤成交量(Sell Call)</div>
+        <div class="col-call-vol">成交量</div>
+        <div class="col-call-ratio">內外盤%</div>
+        <div class="col-call-avg">均價</div>
+        <div class="col-call-val">淨CALL</div>
+        <div class="col-call-bar"></div>
+        <div class="col-strike">履約價</div>
+        <div class="col-put-bar"></div>
+        <div class="col-put-val">淨PUT</div>
+        <div class="col-put-sell">外盤成交量(Buy Put)</div>
+        <div class="col-put-buy">內盤成交量(Sell Put)</div>
+        <div class="col-put-vol">成交量</div>
+        <div class="col-put-ratio">內外盤%</div>
+        <div class="col-put-avg">均價</div>
+        <div class="col-pnl-call">Call損益(億)</div>
+        <div class="col-pnl-put">Put損益(億)</div>
+        <div class="col-pnl-combined">合併損益(億)</div>
+      </div>
+      <div id="strike-table-body">
+        <!-- 由 app.js 動態填入 -->
+      </div>
     </div>
   </section>
+
+  <!-- 左右拖拉分隔線 -->
+  <div id="resize-handle"></div>
 
   <!-- 右側：損益曲線圖 -->
   <section id="right-panel">
     <div id="pnl-chart"></div>
+    <div id="range-slider-wrap">
+      <div id="range-slider"></div>
+    </div>
   </section>
 
 </main>
-
-<!-- ── 狀態監控角落 ── -->
-<div id="status-bar">
-  <span id="conn-dot" class="dot dot-gray"></span>
-  <span id="conn-label">連線中...</span>
-  &nbsp;｜&nbsp;
-  <span id="sub-count">--</span> 個合約
-  &nbsp;｜&nbsp;
-  <span id="rx-age">等待中...</span>
-</div>
 
 <script src="/static/app.js"></script>
 </body>
