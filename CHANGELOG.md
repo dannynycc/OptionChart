@@ -1,5 +1,44 @@
 # Changelog
 
+## v2.2 (2026-03-24)
+
+### 修正：內外盤欄位對調錯誤（三層 bug fix）
+
+#### 問題根源
+內盤（賣盤）與外盤（買盤）數值顯示錯誤，共三個獨立 bug 疊加：
+
+1. **`calculator.py`：`inout_ratio` 公式反向**
+   - 舊：`ask_match / total * 100`（算的是內盤比，與欄位名「外盤比」矛盾）
+   - 新：`bid_match / total * 100`（外盤=買方主動，與 XQFAP 定義一致）
+
+2. **`static/app.js`：買盤/賣盤欄位對調**
+   - `bid_match`（外盤口數）誤放入 `col-call-sell`（賣盤欄）
+   - `ask_match`（內盤口數）誤放入 `col-call-buy`（買盤欄）
+   - CALL/PUT 兩側均修正
+
+3. **`capital_feed.py`：nTBc / nTAc 對調**
+   - 根據群益 SKCOM API Manual + Eskmo 文件確認：
+     `nTBc` = 外盤量（買方主動，口數，全日累計）
+     `nTAc` = 內盤量（賣方主動，口數，全日累計）
+   - 舊：`bid_match = s.nTAc`（錯）、`ask_match = s.nTBc`（錯）
+   - 新：`bid_match = s.nTBc`（外盤）、`ask_match = s.nTAc`（內盤）
+   - 修正三處：初始快照、`_on_notify_quote_long`、`_on_notify_ticks_long`
+   - 修正錯誤 comment：移除「nTAc+nTBc 只從訂閱後累計」（Eskmo 確認為全日累計）
+   - Log 訊息加上 `(外盤)/(內盤)` 標示，方便現場驗證
+
+### 新增：富邦 trades channel 精確口數累計（fubon_feed.py）
+
+#### 問題
+富邦 aggregates channel 的 `totalBidMatch`/`totalAskMatch` 為**筆數**（trade count），非口數（contract volume）。比例換算（筆數 ratio × 成交量）在大單/小單混合時失真。
+
+#### 解法
+- 新增訂閱 `trades` WebSocket channel（與 `aggregates` 共用同一 callback）
+- 每筆成交依 `price vs bid/ask` 判斷方向，累計精確口數到 `_exact_vol`
+- `aggregates` 更新時優先使用 `_exact_vol`；啟動前的歷史成交無法取得，接受不完整基準
+- 新增 `_seen_serials` set，防止重連時 snapshot 重送造成重複累計
+
+---
+
 ## v2.1 (2026-03-24)
 
 ### 夜盤基準值（afterhours baseline）— 修正日+夜合計成交量

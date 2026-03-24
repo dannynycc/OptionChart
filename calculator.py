@@ -28,11 +28,11 @@ class OptionData:
 
     @property
     def inout_ratio(self) -> float:
-        """外盤比 (0~100)：外盤(nTBc=ask_match) 占總量比例，與 XQFAP 一致"""
+        """外盤比 (0~100)：外盤(bid_match=totalBidMatch 買方主動) 占總量比例，與 XQFAP 一致"""
         total = self.bid_match + self.ask_match
         if total == 0:
             return 50.0
-        return self.ask_match / total * 100
+        return self.bid_match / total * 100
 
     @property
     def net_position(self) -> float:

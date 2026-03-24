@@ -93,8 +93,8 @@ class _SKSTOCKLONG2(Structure):
         ("nBc",             c_int),
         ("nAsk",            c_int),
         ("nAc",             c_int),
-        ("nTBc",            c_int),      # 外盤累計口數 ✅ ask_match
-        ("nTAc",            c_int),      # 內盤累計口數 ✅ bid_match
+        ("nTBc",            c_int),      # 外盤累計口數（買方主動，全日）
+        ("nTAc",            c_int),      # 內盤累計口數（賣方主動，全日）
         ("nFutureOI",       c_int),
         ("nTQty",           c_int),      # 總成交量 ✅
         ("nYQty",           c_int),
@@ -432,9 +432,9 @@ def _load_and_subscribe():
         divisor = math.pow(10, s.nDecimal) if s.nDecimal > 0 else 1.0
         snapshot.append({
             'symbol':       code,
-            'bid_match':    s.nTAc,
-            'ask_match':    s.nTBc,
-            'trade_volume': s.nTQty,   # 全日累計量；nTAc+nTBc 只從訂閱後累計
+            'bid_match':    s.nTBc,    # 外盤口數（買方主動，全日累計）
+            'ask_match':    s.nTAc,    # 內盤口數（賣方主動，全日累計）
+            'trade_volume': s.nTQty,   # 全日累計成交量
             'avg_price':    s.nClose / divisor,
         })
         debug_rows.append((code, s.nTAc, s.nTBc, s.nTQty, s.nClose / divisor))
@@ -539,12 +539,12 @@ def _on_notify_quote_long(market_no, stock_no_ptr):
             return
 
         divisor = math.pow(10, s.nDecimal) if s.nDecimal > 0 else 1.0
-        logger.info(f"TICK {stock_no}: nTAc={s.nTAc} nTBc={s.nTBc} nTQty={s.nTQty} vol={s.nTAc+s.nTBc} close={s.nClose/divisor:.2f}")
+        logger.info(f"TICK {stock_no}: nTBc={s.nTBc}(外盤) nTAc={s.nTAc}(內盤) nTQty={s.nTQty} close={s.nClose/divisor:.2f}")
         update_q.put({
             'symbol':       stock_no,
-            'bid_match':    s.nTAc,
-            'ask_match':    s.nTBc,
-            'trade_volume': s.nTQty,   # 全日累計量
+            'bid_match':    s.nTBc,    # 外盤口數（買方主動，全日累計）
+            'ask_match':    s.nTAc,    # 內盤口數（賣方主動，全日累計）
+            'trade_volume': s.nTQty,   # 全日累計成交量
             'avg_price':    s.nClose / divisor,
         })
     except Exception as e:
@@ -578,8 +578,8 @@ def _on_notify_ticks_long(
         )
         update_q.put({
             'symbol':       stock_no,
-            'bid_match':    s.nTAc,
-            'ask_match':    s.nTBc,
+            'bid_match':    s.nTBc,    # 外盤口數（買方主動，全日累計）
+            'ask_match':    s.nTAc,    # 內盤口數（賣方主動，全日累計）
             'trade_volume': s.nTQty,
             'avg_price':    price,
         })

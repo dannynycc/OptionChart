@@ -78,6 +78,10 @@ update_q:  "queue.Queue[dict]" = queue.Queue()
 _baseline: dict[str, dict] = {}   # 夜盤基準值（啟動時取一次，固定不變）
 _debug_msg_count = 0
 
+# trades channel 累計的精確口數（含基準值）
+# {symbol: {'bid_vol': int, 'ask_vol': int}}
+_exact_vol: dict[str, dict] = {}
+
 # ── Symbol 解析 ────────────────────────────────────────────────
 
 # TX4{strike}C6 → Call / TX4{strike}O6 → Put
@@ -124,8 +128,9 @@ def _http_worker():
 
 def _on_message(raw_data):
     """
-    aggregates channel 回傳（raw bytes）。
-    前 3 筆印原始 JSON 確認欄位名稱。
+    aggregates + trades channel 共用 callback（同一 WebSocket client）。
+    - aggregates 訊息（有 total.avgPrice / closePrice）：更新 avgPrice / tradeVolume，推送 queue
+    - trades 訊息（有 trades 陣列）：per-trade price vs bid/ask，累計精確口數到 _exact_vol
     """
     global _debug_msg_count
     try:
@@ -145,40 +150,83 @@ def _on_message(raw_data):
         if symbol not in meta_map:
             return
 
-        total        = data.get('total', {})
-        bid_match    = int(total.get('totalBidMatch') or 0)
-        ask_match    = int(total.get('totalAskMatch') or 0)
+        # ── trades channel：有 trades 陣列時，累計精確外盤/內盤口數 ──────
+        trades = data.get('trades') or []
+        if trades:
+            if symbol not in _exact_vol:
+                base = _baseline.get(symbol, {})
+                _exact_vol[symbol] = {
+                    'bid_vol': base.get('bid_match', 0),
+                    'ask_vol': base.get('ask_match', 0),
+                }
+            ev = _exact_vol[symbol]
+            for t in trades:
+                serial = t.get('serial') or data.get('serial')
+                if serial and serial in _seen_serials:
+                    continue
+                if serial:
+                    _seen_serials.add(serial)
+                price = float(t.get('price') or 0)
+                size  = int(t.get('size')  or 0)
+                bid   = float(t.get('bid') or 0)
+                ask   = float(t.get('ask') or 0)
+                if size <= 0 or price <= 0:
+                    continue
+                if ask > 0 and price >= ask:
+                    ev['bid_vol'] += size          # 外盤：hit ask
+                elif bid > 0 and price <= bid:
+                    ev['ask_vol'] += size          # 內盤：hit bid
+                else:
+                    half = size // 2
+                    ev['bid_vol'] += half
+                    ev['ask_vol'] += size - half
+
+        # ── aggregates channel：有 total 時，更新 avgPrice / tradeVolume ─
+        total = data.get('total', {})
+        if not total:
+            return
+
         trade_volume = int(total.get('tradeVolume') or 0)
         avg_price    = float(
+            data.get('avgPrice')   or
             data.get('closePrice') or
             data.get('lastPrice')  or
             data.get('price')      or 0.0
         )
 
         base = _baseline.get(symbol, {})
-        combined_bid  = bid_match    + base.get('bid_match', 0)
-        combined_ask  = ask_match    + base.get('ask_match', 0)
-        combined_vol  = trade_volume + base.get('trade_volume', 0)
+        combined_vol = trade_volume + base.get('trade_volume', 0)
+
+        # 優先用 trades channel 累計的精確口數；還沒資料就用 aggregates 筆數
+        ev = _exact_vol.get(symbol)
+        if ev is not None:
+            out_bid     = ev['bid_vol']
+            out_ask     = ev['ask_vol']
+            out_bid_day = max(out_bid - base.get('bid_match', 0), 0)
+            out_ask_day = max(out_ask - base.get('ask_match', 0), 0)
+        else:
+            out_bid     = int(total.get('totalBidMatch') or 0) + base.get('bid_match', 0)
+            out_ask     = int(total.get('totalAskMatch') or 0) + base.get('ask_match', 0)
+            out_bid_day = int(total.get('totalBidMatch') or 0)
+            out_ask_day = int(total.get('totalAskMatch') or 0)
 
         logger.debug(
-            f"AGG {symbol}: "
-            f"bid={bid_match}+{base.get('bid_match',0)} "
-            f"ask={ask_match}+{base.get('ask_match',0)} "
-            f"vol={trade_volume}+{base.get('trade_volume',0)} "
-            f"price={avg_price}"
+            f"AGG {symbol}: bid={out_bid} ask={out_ask} vol={combined_vol} price={avg_price}"
         )
         update_q.put({
-            'symbol':          symbol,
-            'bid_match':       combined_bid,
-            'ask_match':       combined_ask,
-            'trade_volume':    combined_vol,
-            'bid_match_day':   bid_match,    # 純日盤
-            'ask_match_day':   ask_match,
+            'symbol':           symbol,
+            'bid_match':        out_bid,
+            'ask_match':        out_ask,
+            'trade_volume':     combined_vol,
+            'bid_match_day':    out_bid_day,
+            'ask_match_day':    out_ask_day,
             'trade_volume_day': trade_volume,
-            'avg_price':       avg_price,
+            'avg_price':        avg_price,
         })
     except Exception as e:
         logger.warning(f"_on_message error：{e}")
+
+_seen_serials: set[int] = set()   # 防重複（重連時 snapshot 可能重送）
 
 # ── 主程式 ────────────────────────────────────────────────────
 
@@ -236,8 +284,8 @@ def main():
             ah = rc.quote(symbol=symbol, session='afterhours')
             t = ah.get('total', {})
             return symbol, {
-                'bid_match':    int(t.get('totalBidMatch')  or 0),
-                'ask_match':    int(t.get('totalAskMatch')  or 0),
+                'bid_match':    int(t.get('totalBidMatch')  or 0),  # 外盤筆數
+                'ask_match':    int(t.get('totalAskMatch')  or 0),  # 內盤筆數
                 'trade_volume': int(t.get('tradeVolume')    or 0),
             }
         except Exception:
@@ -281,7 +329,7 @@ def main():
     # 6. 啟動 HTTP worker
     threading.Thread(target=_http_worker, daemon=True).start()
 
-    # 7. WebSocket 訂閱 aggregates
+    # 7. WebSocket 訂閱 aggregates + trades
     logger.info("連接 WebSocket（futopt）...")
     futopt_ws = sdk.marketdata.websocket_client.futopt
     futopt_ws.on('message',    _on_message)
@@ -289,10 +337,11 @@ def main():
     futopt_ws.on('disconnect', lambda *_: logger.warning("WS 斷線"))
 
     futopt_ws.connect()
-    logger.info(f"已連接，訂閱 {len(near)} 個合約的 aggregates channel...")
+    logger.info(f"已連接，訂閱 {len(near)} 個合約的 aggregates + trades channel...")
 
     for p, _ in near:
         futopt_ws.subscribe({'channel': 'aggregates', 'symbol': p['symbol']})
+        futopt_ws.subscribe({'channel': 'trades',     'symbol': p['symbol']})
 
     logger.info("訂閱完成，等待即時報價...")
 
