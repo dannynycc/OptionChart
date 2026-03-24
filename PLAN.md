@@ -1,211 +1,203 @@
-# OptionChart 開發計畫
+# OptionBridge 開發計畫
 
-## 專案目標
-用富邦 fubon_neo SDK 取得台指選擇權（TXO）即時資料，
-製作一個網頁版籌碼面板，仿照 `籌碼表範例.png`：
-- 左側：各履約價的 淨CALL / 淨PUT 面積圖（T字報價表）
-- 右側：買方合併損益曲線 + Max Pain 標注
-
-公式詳見 `FORMULA.md`。
+最後更新：2026-03-24
 
 ---
 
-## 技術選型
+## 現狀總結
 
-| 層 | 技術 | 理由 |
-|----|------|------|
-| 資料來源 | fubon_neo SDK WebSocket | 不需開 e01，直連富邦，無 rate limit 問題 |
-| 後端框架 | Python + FastAPI | 輕量，原生支援 WebSocket，async 友善 |
-| 前端圖表 | ECharts | 支援面積圖、折線圖、標注線，文件完整 |
-| 前端樣式 | 純 HTML/CSS/JS | 無框架依賴，部署簡單 |
-
----
-
-## 檔案結構
+### 架構（v1.5）
+全部在 Windows 本機，不需要 WSL：
 
 ```
-~/OptionChart/
-├── main.py              # FastAPI 主程式（entry point）
-├── fubon_client.py      # 富邦 WebSocket 連線管理
-├── calculator.py        # 所有計算邏輯（淨CALL/PUT、損益曲線、Max Pain）
-├── config.py            # 帳號/憑證設定（不進版控）
-├── requirements.txt     # Python 依賴
-├── static/
-│   ├── index.html       # 主頁面
-│   ├── app.js           # 前端邏輯（WebSocket、ECharts）
-│   └── style.css        # 樣式
-├── FORMULA.md           # 公式與欄位定義
-└── PLAN.md              # 本文件
+C:\Users\Home\Desktop\OptionBridge\
+├── main.py              ← FastAPI server（uvicorn on Windows :8000）
+├── calculator.py        ← 純計算邏輯
+├── static/              ← 前端（index.html, app.js, style.css）
+├── capital_bridge.py    ← 群益橋接（SKCOM.dll → POST /api/feed）
+├── config_capital.py    ← 群益帳密（不進 git）
+├── libs/SKCOM.dll       ← 群益 DLL
+├── start.bat / stop.bat ← 一鍵啟動/停止
+└── PLAN.md              ← 本檔案
 ```
 
----
+### 資料流
+```
+群益SKCOM.dll
+    ↓ OnNotifyQuoteLONG callback + 每0.5s re-subscribe
+capital_bridge.py
+    ↓ POST /api/init（啟動時一次）
+    ↓ POST /api/feed（每0.5s批次）
+main.py (uvicorn :8000)
+    ↓ WebSocket broadcast
+瀏覽器 http://localhost:8000
+```
 
-## Phase 1 — 資料層驗證 ✅ 完成（2026-03-23）
-
-### Step 1.1：安裝與登入測試 ✅
-- SDK 從官網下載 wheel 安裝（PyPI 無此套件）
-- 登入成功：帳號蔣承哲 / 296612 / futopt
-
-### Step 1.2：取得近月 TXO 所有合約代碼 ✅
-- 近月結算日：2026-03-25，共 242 個合約（Call 121 + Put 121）
-- 符號格式：`TX429400C6`（C=買權）、`TX429400O6`（O=賣權，注意是 O 不是 P）
-- 履約價從名稱欄位取（name 含「買權」/「賣權」分辨 Call/Put）
-- **需要 2 條 WebSocket 連線**（242 > 200）
-
-### Step 1.3：WebSocket 訂閱測試 ✅
-- 認證、訂閱成功
-- 訊息格式是**原始 JSON 字串**，需 `json.loads()` 解析
-- `total.tradeVolume` / `totalBidMatch` / `totalAskMatch` 欄位確認存在
-- `avgPrice`：只在交易時段有成交時才出現，盤後為空（待交易時段驗證）
-- SDK 在程式結束時有 Segfault，是 SDK 本身 bug，不影響功能
-
-### Step 1.4：計算驗算 ⏳ 待交易時段執行
-- 需在 08:45~13:45 執行，確認 avgPrice 出現並驗算淨CALL/PUT 數值
+### Git
+- Repo：https://github.com/dannynycc/OptionChart
+- Windows OptionBridge/ 已直接 init git，不再依賴 WSL
+- config_capital.py / config_fubon.py 不進 git（含帳密）
 
 ---
 
-## Phase 2 — 後端架構 🔨 進行中
+## Phase 1：收尾清理（待執行）
 
-### Step 2.1：`config.py`
+- [ ] 刪除 `config_bridge.py`（舊版群益設定，已被 config_capital.py 取代）
+- [ ] 刪除 `C:\Users\Home\Desktop\wheels\`（安裝 fastapi/uvicorn 用的暫存 wheel，已無用）
+
+---
+
+## Phase 2：富邦橋接（主要工作）
+
+### 目標
+新增 `fubon_bridge.py` + `config_fubon.py`，讓系統可以從富邦期貨 API 接收 TXO 選擇權行情。
+推送格式與群益完全相同，`main.py` / `calculator.py` / `static/` 完全不動。
+
+### 富邦 API 基本資訊
+- SDK：`fubon_neo`（Python package，`pip install fubon_neo`）
+- 文件：https://www.fbs.com.tw/TradeAPI/docs/trading/introduction
+- 登入需要：身分證字號、密碼、憑證路徑（.pfx）、憑證密碼
+
+### config_fubon.py 格式
 ```python
-ID        = "your_id"
-PASSWORD  = "your_password"
-CERT_PATH = "/path/to/cert.pfx"
-CERT_PASS = "your_cert_password"
+ID            = "your_fubon_id"
+PASSWORD      = "your_fubon_password"
+CERT_PATH     = r"C:\path\to\cert.pfx"
+CERT_PASSWORD = "your_cert_password"
+SERVER_URL    = "http://localhost:8000"
+TARGET_SERIES = "TXO"
 ```
 
-### Step 2.2：`calculator.py`
-負責所有純計算邏輯，不依賴任何 SDK：
-```
-parse_symbol(symbol)
-  → 回傳 { strike: int, type: "C"/"P" }
+### fubon_bridge.py 實作順序
 
-calc_net_position(bid_match, ask_match, volume)
-  → 回傳 淨CALL 或 淨PUT 值
-
-calc_combined_pnl(call_data, put_data)
-  → 回傳 { x: [履約價列表], y: [合併損益列表], max_pain: int }
-  → call_data / put_data 各為 list of { strike, net_position, avg_price }
+#### Step 1：安裝 SDK
 ```
-
-### Step 2.3：`fubon_client.py`
-管理富邦 WebSocket 連線：
+pip install fubon_neo
 ```
-FubonClient
-  ├── connect()          登入 + init_realtime + 取得合約列表 + 訂閱 WebSocket
-  ├── on_message(data)   收到推播 → 更新內存 store → 觸發重算 → 呼叫 callback
-  ├── reconnect()        斷線時自動重連（指數退避）
-  └── store              dict，key=symbol，value=最新資料
+若無網路，用 WSL 下載 wheel 再離線安裝（同之前安裝 fastapi 的方式）。
+
+#### Step 2：登入 + 初始化行情連線
+```python
+from fubon_neo.sdk import FubonSDK
+sdk = FubonSDK()
+accounts = sdk.login(cfg.ID, cfg.PASSWORD, cfg.CERT_PATH, cfg.CERT_PASSWORD)
+sdk.init_realtime()
 ```
 
-### Step 2.4：`main.py`
-FastAPI 主程式：
-```
-GET  /              → 回傳 index.html
-GET  /api/data      → 回傳目前最新計算結果（JSON，供初始載入用）
-GET  /api/status    → 回傳連線狀態、訂閱數、最後更新時間
-WS   /ws            → 瀏覽器連線後，每次有更新就廣播最新資料
-```
+#### Step 3：取得近月 TXO 合約清單
+- 端點：`GET /intraday/products/?type=OPTION&exchange=TAIFEX`
+- 篩選：只取 TXO 格式、排除 AM 結算版、近月 = 最早 `settlementDate`
+- 回傳欄位：`symbol`, `name`, `settlementDate`, `referencePrice`（作為 prev_close）
 
-廣播邏輯：
-- 富邦推播 → 重算 → 廣播給所有已連線的瀏覽器 WebSocket
-- 多個瀏覽器同時看：只做一次計算，廣播給全部人
-
----
-
-## Phase 3 — 前端 UI ✅ 完成
-
-### Step 3.1：`index.html` 版面骨架
-```
-┌─────────────────────────────────────────────────────┐
-│  頂部工具列：到期日 | 資料時間 | 結算日             │
-├─────────────────────────────┬───────────────────────┤
-│  左側：T字報價表            │  右側：損益曲線圖     │
-│                             │                       │
-│  [淨CALL面積] [履約價] [淨PUT面積]  │  ECharts 折線圖      │
-│  （每列一個履約價）         │  Max Pain 標注        │
-│  高亮目前指數附近           │  目前指數垂直線       │
-│                             │                       │
-└─────────────────────────────┴─────────────────────┬─┘
-                                          狀態監控角落 │
-                                  ● 連線：已連線      │
-                                  ● 訂閱：xx 個       │
-                                  ● 更新：xx:xx:xx    │
-                                                      └─
-```
-
-### Step 3.2：左側 T字報價表
-- 用 HTML `<table>` 實作（每列 = 一個履約價）
-- 排列：**高履約價在上，低履約價在下**（與範例圖一致）
-- 淨CALL 欄：數值 + 以 `<div>` 寬度比例模擬面積延伸（向左）
-- 淨PUT 欄：同上（向右延伸）
-- 比例計算：`width% = abs(value) / max_abs_value * 100`
-- 高亮列：目前指數最近的履約價列（黃色或藍色背景）
-- 正值用綠色，負值用紅色
-
-### Step 3.3：右側損益曲線圖（ECharts）
-- 折線圖（藍色曲線）
-- 曲線下方填色（淡粉紅 area）
-- 兩條垂直標注線：
-  - Max Pain 位置（橘色虛線 + 標籤）
-  - 目前指數位置（藍色實線 + 標籤）
-- Y 軸：億元，顯示到小數點後兩位
-- X 軸：履約價
-
-### Step 3.4：`app.js` WebSocket 邏輯
-```javascript
-// 連線後端 WebSocket
-const ws = new WebSocket("ws://localhost:8000/ws")
-
-ws.onmessage = (event) => {
-  const data = JSON.parse(event.data)
-  updateTable(data.strikes)   // 更新左側表格
-  updateChart(data.pnl)       // 更新右側圖表
-  updateStatus(data.status)   // 更新狀態角落
+#### Step 4：POST /api/init
+```json
+{
+  "settlement_date": "20260325",
+  "contracts": [
+    {"symbol": "TXOW40330C", "strike": 20330, "side": "C", "prev_close": 45.0},
+    ...
+  ]
 }
+```
 
-// 斷線自動重連
-ws.onclose = () => setTimeout(connect, 3000)
+#### Step 5：即時行情訂閱（WebSocket trades channel）
+```python
+stock.subscribe({'channel': 'trades', 'symbol': contract_symbol})
+
+def on_message(message):
+    # message 含逐筆 price, qty
+    # avg_price 用最新成交價
+    update_q.put({...})
+```
+注意：aggregates channel 是股票專用，選擇權一律用 `trades` channel。
+
+#### Step 6：bid_match / ask_match（REST 定期輪詢）
+trades channel 不直接給內/外盤累計量，需定期補充：
+- 每 0.5s 呼叫：`GET /intraday/volumes/{symbol}`
+- `volumeAtBid` → `bid_match`（內盤，賣方主動）
+- `volumeAtAsk` → `ask_match`（外盤，買方主動）
+- `volume`      → `trade_volume`（全日累計量）
+
+#### Step 7：POST /api/feed（批次推送，同群益格式）
+```json
+[
+  {
+    "symbol": "TXOW40330C",
+    "bid_match": 123,
+    "ask_match": 456,
+    "trade_volume": 579,
+    "avg_price": 45.5
+  }
+]
+```
+
+#### Step 8：主迴圈
+富邦 SDK 內建事件驅動，不需要 Windows MSG loop：
+```python
+try:
+    while True:
+        time.sleep(1)
+except KeyboardInterrupt:
+    pass
 ```
 
 ---
 
-## Phase 4 — 整合測試 ⏳ 待交易時段執行
+## Phase 3：start.bat 支援切換 broker
 
-### Step 4.1：數值驗算
-- 開 Excel 和網頁並排
-- 確認同一時間點的淨CALL/PUT、Max Pain 點數值一致
+```bat
+@echo off
+chcp 65001 >nul
+set BROKER=%1
+if "%BROKER%"=="" set BROKER=capital
 
-### Step 4.2：多瀏覽器測試
-- 開 3 個瀏覽器分頁同時連線
-- 確認都收到即時更新
-- 確認後端只跑一份計算
+echo [1/2] 啟動 FastAPI server...
+start "OptionChart Server" /min cmd /c "python -m uvicorn main:app --host 0.0.0.0 --port 8000 >> bridge_out.log 2>> bridge_err.log"
+timeout /t 2 /nobreak >nul
 
-### Step 4.3：穩定性測試
-- 讓程式跑 1 小時，觀察記憶體是否洩漏
-- 手動斷網後恢復，確認自動重連正常
+echo [2/2] 啟動 %BROKER% bridge...
+python %BROKER%_bridge.py
+pause
+```
 
----
-
-## 已知風險與待確認事項
-
-| 風險 | 說明 | 解法 |
-|------|------|------|
-| WebSocket trades channel 欄位 | 未確認是否包含 avgPrice、totalBidMatch/AskMatch | Phase 1 Step 1.3 驗證，不足則補 HTTP polling |
-| 近月合約數量 | 若超過 200 個需開第 2 條 WebSocket 連線 | Phase 1 Step 1.2 確認數量 |
-| 同帳號多裝置登入限制 | 官方文件未說明上限 | 實測，或致電客服 0800-073588 |
-| 盤後/夜盤資料 | 是否需要支援 afterhours session | MVP 先做一般交易時段 |
+使用方式：
+```
+start.bat            ← 預設跑群益
+start.bat capital    ← 明確指定群益
+start.bat fubon      ← 跑富邦
+```
 
 ---
 
-## MVP 範圍（現階段目標）
+## Phase 4：bridge_core.py 抽共用邏輯（選做）
 
-- [x] 近月 TXO 資料
-- [x] 淨CALL / 淨PUT 面積圖（左側）
-- [x] 合併損益曲線 + Max Pain（右側）
-- [x] 即時更新（WebSocket 推播）
-- [x] 狀態監控角落
-- [ ] 切換不同結算日（未來）
-- [ ] 切換累計區間（未來）
-- [ ] 左側柱狀圖（功能待確認）
-- [ ] 雲端部署（未來）
+等兩個 bridge 都跑通後評估，可抽出：
+- `update_q`（共用推送 queue）
+- `_http_worker()`（批次 POST /api/feed）
+- `meta_map` 型別定義
+
+---
+
+## 關鍵欄位對照表
+
+| 意義 | 群益（SKCOM） | 富邦（fubon_neo） |
+|------|-------------|-----------------|
+| 內盤累計量（賣方主動） | `nTAc` → `bid_match` | `volumeAtBid` → `bid_match` |
+| 外盤累計量（買方主動） | `nTBc` → `ask_match` | `volumeAtAsk` → `ask_match` |
+| 全日累計總量 | `nTQty` → `trade_volume` | `volume` → `trade_volume` |
+| 最新成交價 | `nClose / 10^nDecimal` | trades callback `price` |
+| 前日收盤價 | `nRef / 10^nDecimal` | `referencePrice`（products API）|
+| 合約清單來源 | `SKQuoteLib_RequestStockList(3)` | `GET /intraday/products/?type=OPTION` |
+| 即時行情來源 | `OnNotifyQuoteLONG` callback | WebSocket `trades` channel |
+
+---
+
+## 公式（不因 broker 而變）
+
+```
+外盤比(%) = ask_match / (bid_match + ask_match) × 100
+淨部位    = bid_match - ask_match
+CALL 損益 = Σ[ max(settlement - strike, 0) - avg_premium ] × net_position × 50
+PUT  損益 = Σ[ max(strike - settlement, 0) - avg_premium ] × net_position × 50
+Max Pain  = 合併損益最小值對應的履約價
+```
