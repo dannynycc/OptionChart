@@ -1,5 +1,26 @@
 # Changelog
 
+## v1.5 (2026-03-24)
+
+### 架構重構：移除 WSL 依賴，全面搬移至 Windows 本機
+
+#### 搬移
+- `main.py`、`calculator.py`、`static/` 從 WSL `~/OptionChart/` 搬至 Windows `OptionBridge/`
+- FastAPI server 改在 Windows 本機以 `uvicorn` 執行，不再需要 WSL
+
+#### 檔案重命名
+- `skcom_bridge.py` 改名為 `capital_bridge.py`（明確標示為群益橋接）
+- `config_bridge.py` 改名為 `config_capital.py`（明確標示為群益設定）
+
+#### 腳本更新
+- `start.bat`：移除 `wsl` 指令，改為 Windows 本機啟動 uvicorn
+- `stop.bat`：移除 WSL pkill，只 kill Windows python.exe
+
+#### 相依套件
+- Windows 端安裝 `fastapi`、`uvicorn`（離線 wheel 方式安裝）
+
+---
+
 ## v1.4 (2026-03-23)
 
 ### 前端

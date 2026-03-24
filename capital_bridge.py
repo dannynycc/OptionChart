@@ -1,15 +1,15 @@
 """
-skcom_bridge.py  ── ctypes.WinDLL 版（群益 SKCOM 2.13.x 新介面）
-Windows 端橋接：群益 SKCOM → WSL FastAPI server
+capital_bridge.py  ── ctypes.WinDLL 版（群益 SKCOM 2.13.x 新介面）
+Windows 端橋接：群益 SKCOM → 本機 FastAPI server (main.py)
 
-【執行環境】Windows 原生 Python 64-bit（不是 WSL）
+【執行環境】Windows 原生 Python 64-bit
 【必要套件】pip install requests
 【執行方式】
-  python skcom_bridge.py              # 正常執行（訂閱 TXO 近月 + 推送給 WSL）
-  python skcom_bridge.py --discover   # 列出市場 3 商品清單（確認資料格式）
-  python skcom_bridge.py --debug      # 印出第一個 TXO 選擇權的 struct 欄位值
+  python capital_bridge.py              # 正常執行（訂閱 TXO 近月 + 推送給 server）
+  python capital_bridge.py --discover   # 列出市場 3 商品清單（確認資料格式）
+  python capital_bridge.py --debug      # 印出第一個 TXO 選擇權的 struct 欄位值
 
-【config_bridge.py 範本（與此檔案同目錄）】
+【config_capital.py 範本（與此檔案同目錄）】
   SKCOM_DLL  = r"C:\\Program Files\\群益API\\SKCOM.dll"
   ID         = "your_capital_id"
   PASSWORD   = "your_capital_password"
@@ -45,9 +45,9 @@ logger = logging.getLogger(__name__)
 # ── 設定 ──────────────────────────────────────────────────────
 
 try:
-    import config_bridge as cfg
+    import config_capital as cfg
 except ImportError:
-    print("找不到 config_bridge.py，請建立（與此檔案同目錄）：")
+    print("找不到 config_capital.py，請建立（與此檔案同目錄）：")
     print('  SKCOM_DLL  = r"C:\\Program Files\\群益API\\SKCOM.dll"')
     print('  ID         = "your_capital_id"')
     print('  PASSWORD   = "your_capital_password"')

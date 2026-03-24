@@ -1,7 +1,7 @@
 """
 main.py
-FastAPI 後端：接收 Windows skcom_bridge.py 透過 HTTP 推送的群益 TXO 報價，
-廣播給瀏覽器（WebSocket）。
+FastAPI 後端：接收 bridge（capital_bridge.py / fubon_bridge.py）透過 HTTP 推送的 TXO 報價，
+廣播給瀏覽器（WebSocket）。與 bridge 同在 Windows 本機執行。
 """
 
 import json
