@@ -24,6 +24,7 @@ import time
 import ctypes
 import queue
 import logging
+import datetime
 import threading
 from ctypes import (
     Structure, c_int, c_char_p, c_wchar_p,
@@ -586,6 +587,36 @@ def _on_notify_ticks_long(
     except Exception as e:
         logger.warning(f"OnNotifyTicksLONG error：{e}")
 
+# ── 自動重新初始化排程 ────────────────────────────────────────
+
+# 台灣期貨市場盤前重新初始化時間（hour, minute）
+_REINIT_TIMES = {(8, 43), (14, 58)}   # 日盤 08:45 前、夜盤 15:00 前
+_last_reinit_key = ""                  # "YYYYMMDD-HH" 防止同小時重複觸發
+
+def _auto_reinit_scheduler():
+    """
+    每 20 秒檢查一次。到達盤前時間時，呼叫 _load_and_subscribe()：
+    - 重新取得近月合約（可能已換週）
+    - POST /api/init → server store.clear()
+    - 重新訂閱 SKCOM
+    確保跨盤（日→夜、夜→日）時舊資料被清空。
+    """
+    global _last_reinit_key
+    while True:
+        time.sleep(20)
+        now = datetime.datetime.now()
+        if (now.hour, now.minute) not in _REINIT_TIMES:
+            continue
+        key = f"{now.strftime('%Y%m%d')}-{now.hour}"
+        if key == _last_reinit_key:
+            continue
+        _last_reinit_key = key
+        logger.info(
+            f"[排程] {now.strftime('%H:%M')} 盤前重新初始化"
+            f"（清空 store、重新訂閱）..."
+        )
+        threading.Thread(target=_load_and_subscribe, daemon=True).start()
+
 # ── 主程式 ────────────────────────────────────────────────────
 
 def main():
@@ -627,8 +658,9 @@ def main():
 
     # 啟動 HTTP 推送 worker + 定期輪詢 worker（--discover/--debug 模式不需要）
     if MODE not in ('--discover', '--debug'):
-        threading.Thread(target=_http_worker, daemon=True).start()
-        threading.Thread(target=_poll_worker, daemon=True).start()
+        threading.Thread(target=_http_worker,          daemon=True).start()
+        threading.Thread(target=_poll_worker,          daemon=True).start()
+        threading.Thread(target=_auto_reinit_scheduler, daemon=True).start()
 
     logger.info("等待連線事件（OnConnection）...")
     # SKCOM 的行情 callback 透過 Windows 訊息佇列派送，

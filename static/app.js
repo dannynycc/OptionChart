@@ -146,8 +146,12 @@ function updateTable(rows) {
     const ac  = gC(r, 'ask_match_call'), bc = gC(r, 'bid_match_call');
     const ap  = gC(r, 'ask_match_put'),  bp = gC(r, 'bid_match_put');
 
-    const callPct = (Math.abs(nc) / maxAbsNet * 100).toFixed(1);
-    const putPct  = (Math.abs(np) / maxAbsNet * 100).toFixed(1);
+    // 淨Put 顯示值 = 外盤(Buy Put) − 內盤(Sell Put) = bp − ap = np
+    const displayedNp = np;
+
+    // pct 最大 50%，配合 bar 從中心（right/left:50%）延伸
+    const callPct = (Math.abs(nc)         / maxAbsNet * 50).toFixed(1);
+    const putPct  = (Math.abs(displayedNp) / maxAbsNet * 50).toFixed(1);
 
     const key = r.strike + sfx;
     const prev = prevValues[key] || {};
@@ -155,24 +159,32 @@ function updateTable(rows) {
     prevValues[key] = { nc, vc, rc_, avg_c: r.avg_price_call, ac, bc,
                         np, vp, rp_, avg_p: r.avg_price_put,  ap, bp };
 
+    // 淨Call 正→紅/負→綠；淨Put 正→綠/負→紅
+    const ncCls = nc         > 0 ? ' val-pos' : nc         < 0 ? ' val-neg' : '';
+    const npCls = displayedNp > 0 ? ' val-pos' : displayedNp < 0 ? ' val-neg' : '';
+
     const row = document.createElement('div');
     row.className = 'row' + (r.highlight ? ' highlight' : '');
 
-    row.appendChild(_barCell('col-call-bar', 'bar-call ' + (nc >= 0 ? 'positive' : 'negative'), callPct));
-    row.appendChild(_cell('col-call-val',   nc !== 0 ? nc.toFixed(0) : '',                ch(nc,  'nc')   ? ' flash' : ''));
-    row.appendChild(_cell('col-call-avg',   r.avg_price_call > 0 ? r.avg_price_call.toFixed(1) : '', ch(r.avg_price_call, 'avg_c') ? ' flash' : ''));
-    row.appendChild(_cell('col-call-buy',   bc > 0 ? String(bc) : '',                     ch(bc,  'bc')   ? ' flash' : ''));
-    row.appendChild(_cell('col-call-sell',  ac > 0 ? String(ac) : '',                     ch(ac,  'ac')   ? ' flash' : ''));
+    // CALL side（左→右）：外盤成交量(Buy Call) | 內盤成交量(Sell Call) | 總成交量 | 內外盤% | 成交均價 | 淨Call | bar
+    // col-call-sell → 外盤(Buy Call) = bid_match(bc)；col-call-buy → 內盤(Sell Call) = ask_match(ac)
+    row.appendChild(_cell('col-call-sell',  bc > 0 ? String(bc) : '',                     ch(bc,  'bc')   ? ' flash' : ''));
+    row.appendChild(_cell('col-call-buy',   ac > 0 ? String(ac) : '',                     ch(ac,  'ac')   ? ' flash' : ''));
     row.appendChild(_cell('col-call-vol',   vc > 0 ? String(vc) : '',                     ch(vc,  'vc')   ? ' flash' : ''));
     row.appendChild(_cell('col-call-ratio', vc > 0 ? rc_.toFixed(1) : '',                 ch(rc_, 'rc_')  ? ' flash' : ''));
+    row.appendChild(_cell('col-call-avg',   r.avg_price_call > 0 ? r.avg_price_call.toFixed(1) : '', ch(r.avg_price_call, 'avg_c') ? ' flash' : ''));
+    row.appendChild(_cell('col-call-val' + ncCls, nc !== 0 ? nc.toFixed(0) : '',          ch(nc,  'nc')   ? ' flash' : ''));
+    row.appendChild(_barCell('col-call-bar', 'bar-call ' + (nc >= 0 ? 'positive' : 'negative'), callPct));
     row.appendChild(_cell('col-strike',     String(r.strike),                              ''));
-    row.appendChild(_cell('col-put-ratio',  vp > 0 ? rp_.toFixed(1) : '',                 ch(rp_, 'rp_')  ? ' flash' : ''));
+    // PUT side（左→右）：bar | 淨Put | 外盤成交量(Buy Put) | 內盤成交量(Sell Put) | 總成交量 | 內外盤% | 成交均價
+    // col-put-sell → 外盤(Buy Put) = bid_match(bp)；col-put-buy → 內盤(Sell Put) = ask_match(ap)
+    row.appendChild(_barCell('col-put-bar', 'bar-put ' + (displayedNp >= 0 ? 'positive' : 'negative'), putPct));
+    row.appendChild(_cell('col-put-val' + npCls, displayedNp !== 0 ? displayedNp.toFixed(0) : '', ch(np, 'np') ? ' flash' : ''));
+    row.appendChild(_cell('col-put-sell',   bp > 0 ? String(bp) : '',                     ch(bp,  'bp')   ? ' flash' : ''));
+    row.appendChild(_cell('col-put-buy',    ap > 0 ? String(ap) : '',                     ch(ap,  'ap')   ? ' flash' : ''));
     row.appendChild(_cell('col-put-vol',    vp > 0 ? String(vp) : '',                     ch(vp,  'vp')   ? ' flash' : ''));
-    row.appendChild(_cell('col-put-sell',   ap > 0 ? String(ap) : '',                     ch(ap,  'ap')   ? ' flash' : ''));
-    row.appendChild(_cell('col-put-buy',    bp > 0 ? String(bp) : '',                     ch(bp,  'bp')   ? ' flash' : ''));
+    row.appendChild(_cell('col-put-ratio',  vp > 0 ? rp_.toFixed(1) : '',                 ch(rp_, 'rp_')  ? ' flash' : ''));
     row.appendChild(_cell('col-put-avg',    r.avg_price_put > 0 ? r.avg_price_put.toFixed(1) : '',  ch(r.avg_price_put, 'avg_p') ? ' flash' : ''));
-    row.appendChild(_cell('col-put-val',    np !== 0 ? np.toFixed(0) : '',                ch(np,  'np')   ? ' flash' : ''));
-    row.appendChild(_barCell('col-put-bar', 'bar-put '  + (np >= 0 ? 'positive' : 'negative'), putPct));
 
     body.appendChild(row);
   }

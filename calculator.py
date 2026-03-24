@@ -201,7 +201,9 @@ def build_strike_table(
             # 日+夜 合計
             "net_call":  c.net_position if c else 0,
             "vol_call":  c.trade_volume if c else 0,
-            "ratio_call": round(c.inout_ratio, 1) if c else 50.0,
+            # Call 內外盤%：分子用 bid_match（Buy Call 比例）
+            "ratio_call": round(c.bid_match / (c.bid_match + c.ask_match) * 100, 1)
+                          if c and (c.bid_match + c.ask_match) > 0 else 50.0,
             "net_put":   p.net_position if p else 0,
             "vol_put":   p.trade_volume if p else 0,
             "ratio_put": round(p.inout_ratio, 1) if p else 50.0,

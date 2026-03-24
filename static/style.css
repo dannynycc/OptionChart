@@ -40,7 +40,7 @@ body {
 
 /* ── 左側：T字報價表 ── */
 #left-panel {
-  width: 860px;
+  width: 880px;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
@@ -52,13 +52,23 @@ body {
 #table-header {
   display: flex;
   align-items: center;
-  padding: 4px 0;
+  min-height: 34px;
+  padding: 2px 0;
   background: #161b22;
   border-bottom: 1px solid #30363d;
   font-weight: 600;
   color: #8b949e;
   font-size: 11px;
   flex-shrink: 0;
+}
+/* 長標題欄（內盤成交量/外盤成交量）允許自動換行 */
+#table-header .col-call-buy,
+#table-header .col-call-sell,
+#table-header .col-put-buy,
+#table-header .col-put-sell {
+  white-space: normal;
+  font-size: 9px;
+  line-height: 1.25;
 }
 
 /* 表格捲動區 */
@@ -77,23 +87,23 @@ body {
 #table-header .col-call-avg,
 .row .col-call-avg   { width: 50px; text-align: right; padding-right: 4px; color: #79c0ff; font-size: 11px; }
 #table-header .col-call-buy,
-.row .col-call-buy   { width: 44px; text-align: right; padding-right: 4px; color: #f85149; font-size: 11px; }
+.row .col-call-buy   { width: 62px; text-align: right; padding-right: 4px; color: #3fb950; font-size: 11px; }
 #table-header .col-call-sell,
-.row .col-call-sell  { width: 44px; text-align: right; padding-right: 4px; color: #3fb950; font-size: 11px; }
+.row .col-call-sell  { width: 62px; text-align: right; padding-right: 4px; color: #f85149; font-size: 11px; }
 #table-header .col-call-vol,
 .row .col-call-vol   { width: 44px; text-align: right; padding-right: 4px; color: #8b949e; }
 #table-header .col-call-ratio,
-.row .col-call-ratio { width: 56px; text-align: right; padding-right: 4px; color: #8b949e; }
+.row .col-call-ratio { width: 48px; text-align: right; padding-right: 4px; color: #8b949e; }
 #table-header .col-strike,
 .row .col-strike     { width: 70px; text-align: center; font-weight: 700; }
 #table-header .col-put-ratio,
-.row .col-put-ratio  { width: 56px; text-align: left; padding-left: 4px; color: #8b949e; }
+.row .col-put-ratio  { width: 48px; text-align: left; padding-left: 4px; color: #8b949e; }
 #table-header .col-put-vol,
 .row .col-put-vol    { width: 44px; text-align: left; padding-left: 4px; color: #8b949e; }
-#table-header .col-put-sell,
-.row .col-put-sell   { width: 44px; text-align: left; padding-left: 4px; color: #3fb950; font-size: 11px; }
 #table-header .col-put-buy,
-.row .col-put-buy    { width: 44px; text-align: left; padding-left: 4px; color: #f85149; font-size: 11px; }
+.row .col-put-buy    { width: 62px; text-align: left; padding-left: 4px; color: #f85149; font-size: 11px; }
+#table-header .col-put-sell,
+.row .col-put-sell   { width: 62px; text-align: left; padding-left: 4px; color: #3fb950; font-size: 11px; }
 #table-header .col-put-avg,
 .row .col-put-avg    { width: 50px; text-align: left; padding-left: 4px; color: #79c0ff; font-size: 11px; }
 #table-header .col-put-val,
@@ -116,7 +126,7 @@ body {
 }
 .row.highlight .col-strike { color: #79c0ff; }
 
-/* 面積 bar（Call 向左、Put 向右） */
+/* 面積 bar — 以 bar-wrapper 中心為軸，向左/右延伸各 50% */
 .bar-wrapper {
   position: relative;
   width: 80px;
@@ -124,29 +134,44 @@ body {
   display: flex;
   align-items: center;
 }
-/* Call bar：從右往左填 */
-.bar-call {
+.bar-call, .bar-put {
   position: absolute;
-  right: 0;
   height: 14px;
+  opacity: 0.75;
+}
+/* Call 正值：紅色，從中心往左延伸 */
+.bar-call.positive {
+  background: #f85149;
+  right: 50%; left: auto;
   border-radius: 2px 0 0 2px;
-  opacity: 0.75;
 }
-.bar-call.positive { background: #3fb950; }
-.bar-call.negative { background: #f85149; }
-/* Put bar：從左往右填 */
-.bar-put {
-  position: absolute;
-  left: 0;
-  height: 14px;
+/* Call 負值：綠色，從中心往右延伸 */
+.bar-call.negative {
+  background: #3fb950;
+  left: 50%; right: auto;
   border-radius: 0 2px 2px 0;
-  opacity: 0.75;
 }
-.bar-put.positive { background: #3fb950; }
-.bar-put.negative { background: #f85149; }
+/* Put 正值（Buy>Sell）：綠色，從中心往右延伸 */
+.bar-put.positive {
+  background: #3fb950;
+  left: 50%; right: auto;
+  border-radius: 0 2px 2px 0;
+}
+/* Put 負值（Sell>Buy）：紅色，從中心往左延伸 */
+.bar-put.negative {
+  background: #f85149;
+  right: 50%; left: auto;
+  border-radius: 2px 0 0 2px;
+}
 
-/* 數字 */
+/* 淨Call / 淨Put 數字：依正負變色 */
 .col-call-val, .col-put-val { font-size: 11px; color: #c9d1d9; }
+/* 淨Call 正→紅, 負→綠 */
+.col-call-val.val-pos { color: #f85149; }
+.col-call-val.val-neg { color: #3fb950; }
+/* 淨Put 正→綠, 負→紅 */
+.col-put-val.val-pos  { color: #3fb950; }
+.col-put-val.val-neg  { color: #f85149; }
 
 /* 數值變化閃爍 */
 @keyframes flash-change {

@@ -1,5 +1,33 @@
 # Changelog
 
+## v2.3 (2026-03-24)
+
+### 修正：Call 內外盤% 公式錯誤（stale __pycache__ 導致舊 bytecode 持續生效）
+
+- `calculator.py`：`ratio_call` 分子由 `ask_match` 改為 `bid_match`（外盤/Buy Call 比例）
+  - 舊：`ask_match / total`（算內盤比，顯示 33.9% 但應為 66.1%）
+  - 新：`bid_match / total`（外盤比，與 XQFAP 及欄位定義一致）
+- 根本原因：Windows uvicorn process（PID 2756）未被 bash `kill` 殺到，持續載入舊 `.pyc`
+  - 修復方式：`netstat -ano` 查 Windows PID → `powershell Stop-Process -Force` 殺掉
+
+### 新增：盤前自動重新初始化排程（capital_feed.py）
+
+- 新增 `_auto_reinit_scheduler()` 背景執行緒，每 20 秒檢查一次
+- 於 08:43（日盤前）、14:58（夜盤前）自動呼叫 `_load_and_subscribe()`
+- 效果：跨盤時清空 server store、重新訂閱合約，避免舊盤資料污染新盤
+
+### UI 調整：T 字報價表欄位重排與視覺優化
+
+- **欄位順序重排**
+  - Call 側（左→右）：外盤成交量(Buy Call) | 內盤成交量(Sell Call) | 成交量 | 內外盤% | 均價 | 淨Call | bar
+  - Put 側（左→右）：bar | 淨Put | 外盤成交量(Buy Put) | 內盤成交量(Sell Put) | 成交量 | 內外盤% | 均價
+- **欄位顏色**：外盤成交量(Buy Call/Put)=紅；內盤成交量(Sell Call/Put)=綠（Put 側相反）
+- **Bar 改為中心軸**：pct 縮放至 0~50%，Call 正=紅朝左/負=綠朝右；Put 正=綠朝右/負=紅朝左
+- **淨值動態顯色**：淨Call 正=紅/負=綠；淨Put 正=綠/負=紅
+- **欄位標題簡化**：「總成交量」→「成交量」、「成交均價」→「均價」
+
+---
+
 ## v2.2 (2026-03-24)
 
 ### 修正：內外盤欄位對調錯誤（三層 bug fix）
