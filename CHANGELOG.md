@@ -1,5 +1,30 @@
 # Changelog
 
+## v2.5 (2026-03-24)
+
+### 新增：新富邦e01 DDE 橋接（xqfap_feed.py）
+
+- **新報價源**：直接從新富邦e01 DDE（XQFAP server）取得選擇權外盤/內盤**口數**
+  - `OutSize` → `bid_match`（外盤口數，完全對應 XQ 顯示）
+  - `InSize`  → `ask_match`（內盤口數）
+  - `TotalVolume`, `AvgPrice` 同步取得
+- **取代群益**：`capital_feed.py` 停用，改由 `xqfap_feed.py` 驅動
+- **啟動方式**：`start.bat xqfap`（現有 bat 已支援 %BROKER% 參數）
+- **合約探索**：啟動時自動查 `FITX00.TF-Price` 取得指數中心，探索 ±3500 範圍內所有有效合約
+- **換週更新**：只需改 `config_xqfap.py` 的 `XQ_SERIES`（當週合約系列碼）+ `SETTLEMENT_DATE`
+- **--discover 模式**：`python xqfap_feed.py --discover` 自動找出本月所有可用系列碼
+- **自動重新初始化**：08:43 / 14:58 盤前自動重探合約（與 capital_feed.py 行為一致）
+- 新增 `config_xqfap_template.py`（範本），`config_xqfap.py` 不進 git
+
+### 技術背景
+
+- XQ 資料來源確認：新富邦e01（daqFAP.exe）是 DDE server，名稱 XQFAP，topic Quote
+- symbol 格式：`TX4{SERIES}C{strike}` / `TX4{SERIES}P{strike}`（e.g., TX4N03C32600）
+- 不需要開 Excel；只要新富邦e01 開著即可
+- 資料與 XQ 軟體畫面的 OutSize/InSize 一致
+
+---
+
 ## v2.4 (2026-03-24)
 
 ### 損益圖表全面重設計
