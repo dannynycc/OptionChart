@@ -457,6 +457,7 @@ def _post_contracts(found: list):
             'settlement_date':    sd_str,
             'settlement_display': sd_display,
         })
+    contracts.sort(key=lambda c: c['settlement_date'] or '9999-99-99')
     try:
         requests.post(f"{SERVER_URL}/api/contracts",
                       json={'contracts': contracts}, timeout=5)
