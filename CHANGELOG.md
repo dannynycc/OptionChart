@@ -1,5 +1,22 @@
 # Changelog
 
+## v2.23 (2026-03-26)
+
+### xqfap_feed.py 非 active 系列不再干擾主畫面更新頻率
+
+**根本原因修正：`series_times` 初始為 0 導致非 active 立刻觸發**
+- 原本 `series_times = {}` → `get(series, 0)` 回傳 0 → 每次 active 輪完（~11s）非 active 馬上判定「已超過間隔」→ 再花 ~11s → 用戶感受 ~22s
+- 改為 module-level `_series_times`，_poll_loop 啟動時以 `time.time()` 初始化所有已知系列 timer
+- `_load_one_series` 載入新系列後也以 `setdefault` 設定 timer，防止背景載入完成後立刻觸發
+
+**`_SLOW_FULL = 60`（原 15）**
+- 非 active 每 60s 才插入一次輪詢；主畫面穩態幾乎每 ~10s 更新，偶爾一次 ~21s（每分鐘一次非 active）
+
+**變更檔案**：
+- **`xqfap_feed.py`**：`_series_times` 模組級 dict；timer 初始化；`_SLOW_FULL=60`
+
+---
+
 ## v2.22 (2026-03-26)
 
 ### xqfap_feed.py 啟動速度 + 主畫面更新頻率進一步優化

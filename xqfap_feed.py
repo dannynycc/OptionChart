@@ -1,5 +1,5 @@
 """
-xqfap_feed.py — 新富邦e01 DDE 橋接 (v2.22)
+xqfap_feed.py — 新富邦e01 DDE 橋接 (v2.23)
 讀取 XQFAP DDE server 的 InOutRatio + TotalVolume + AvgPrice
 推送至 FastAPI server (main.py) /api/init + /api/feed
 
@@ -327,10 +327,11 @@ _all_prevs:        dict = {}
 _fast_series:      set  = set()
 _bg_load_queue:    list = []
 _all_valid_series: list = []
+_series_times:     dict = {}   # module-level，供 _load_one_series 初始化新系列 timer
 
 # 輪詢間隔（秒，real time）
 _FAST_FULL = 1   # active 系列
-_SLOW_FULL = 15  # 非 active 系列
+_SLOW_FULL = 60  # 非 active 系列（避免 active+非active 同輪，拖慢主畫面）
 
 _reinit_flag = threading.Event()
 
@@ -377,6 +378,10 @@ def _load_one_series(center: int, full_series: str, sd_str: str):
     _all_metas[day_series]    = meta_day
     _all_prevs[full_series]   = {}
     _all_prevs[day_series]    = {}
+    # 新系列 timer 設為 now，避免加入 _all_metas 後立刻被非 active 輪詢觸發
+    _t = time.time()
+    _series_times.setdefault(full_series, _t)
+    _series_times.setdefault(day_series,  _t)
     _push_snapshot(meta_full, full_series)
     _push_snapshot(meta_day,  day_series)
     logger.info(f"背景載入完成：{full_series} / {day_series}（slow tier，{_SLOW_FULL}s 更新）")
@@ -406,7 +411,11 @@ def _poll_loop():
     非 Active series：_SLOW_FULL 秒，每輪至多輪詢一個（防堆積）
     夜盤時段（15:00~05:00）：日盤系列只做初始快照，不再輪詢
     """
-    series_times: dict[str, float] = {}
+    global _series_times
+    # 已知系列 timer 初始化為 now，避免啟動時非 active 立刻觸發（需等滿 _SLOW_FULL）
+    _now = time.time()
+    for s in list(_all_metas.keys()):
+        _series_times.setdefault(s, _now)
     active_full  = ''
     active_day   = ''
     hb_tick      = 0
@@ -420,7 +429,7 @@ def _poll_loop():
         if _reinit_flag.is_set():
             _reinit_flag.clear()
             _reinit()
-            series_times.clear()
+            _series_times.clear()
             for s, m in list(_all_metas.items()):
                 _push_snapshot(m, s)
             continue
@@ -444,8 +453,8 @@ def _poll_loop():
                 continue
             if _reinit_flag.is_set():
                 break
-            if now - series_times.get(series, 0) >= _FAST_FULL:
-                series_times[series] = now
+            if now - _series_times.get(series, 0) >= _FAST_FULL:
+                _series_times[series] = now
                 batch = _poll_meta(_all_metas[series], _all_prevs[series])
                 if batch:
                     _post_feed(batch, series)
@@ -459,8 +468,8 @@ def _poll_loop():
                 continue
             if night and 'N' not in series:
                 continue
-            if now - series_times.get(series, 0) >= _SLOW_FULL:
-                series_times[series] = now
+            if now - _series_times.get(series, 0) >= _SLOW_FULL:
+                _series_times[series] = now
                 batch = _poll_meta(meta, _all_prevs[series])
                 if batch:
                     _post_feed(batch, series)
