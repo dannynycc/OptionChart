@@ -143,6 +143,8 @@ const btnDay  = document.getElementById('btn-day-session');
 function _setSessionMode(mode) {
   btnFull.classList.toggle('active', mode === 'full');
   btnDay.classList.toggle('active',  mode === 'day');
+  _currentSessionMode = mode;
+  _updateSeriesCode();
   fetch('/api/set-session', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -356,23 +358,37 @@ async function fetchContracts() {
     list.forEach((c, i) => {
       const opt = document.createElement('option');
       opt.value = i;
-      opt.textContent = `合約:${c.label}  期交所代碼:${c.series}`;
+      opt.textContent = c.label;
       sel.appendChild(opt);
     });
 
     sel.value = defaultIdx;
     document.getElementById('settlement-date').textContent =
       list[defaultIdx].settlement_display;
+    _updateSeriesCode();
 
     sel.onchange = () => {
       const c = _contractsData[parseInt(sel.value)];
       if (c) document.getElementById('settlement-date').textContent = c.settlement_display;
+      _updateSeriesCode();
     };
     return true;
   } catch(e) {
     console.warn('fetchContracts failed', e);
     return false;
   }
+}
+
+function _updateSeriesCode() {
+  const sel = document.getElementById('contract-select');
+  if (!sel || !_contractsData.length) return;
+  const c = _contractsData[parseInt(sel.value)];
+  if (!c) return;
+  // 全日盤：TX4N03；日盤：去掉 N → TX403
+  const code = _currentSessionMode === 'day'
+    ? c.series.replace('N', '')
+    : c.series;
+  document.getElementById('series-code').textContent = code;
 }
 
 async function _initContracts() {
@@ -420,6 +436,7 @@ function handleData(data, source) {
   dataSource = source || 'WS';
   const modeChanged = data.session_mode !== _currentSessionMode;
   _currentSessionMode = data.session_mode;
+  if (modeChanged) _updateSeriesCode();
   updateTable(data.table);
   updateChart(data.pnl, modeChanged);
   updateStatus(data.status, data.settlement);
