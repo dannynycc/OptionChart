@@ -1,5 +1,16 @@
 # Changelog
 
+## v2.25 (2026-03-26)
+
+### xqfap_feed.py 移除分層輪詢，保留 vol-skip 優化
+
+移除 v2.24 加入的分層輪詢（優化②），回歸全履約價均等輪詢。
+保留優化①：TotalVolume 不變 → skip InOutRatio + AvgPrice。
+
+**變更檔案**：`xqfap_feed.py`
+
+---
+
 ## v2.24 (2026-03-26)
 
 ### xqfap_feed.py 雙重 DDE call 優化 — 靜盤 2x 加速、全範圍分層輪詢

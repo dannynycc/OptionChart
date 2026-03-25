@@ -1,5 +1,5 @@
 """
-xqfap_feed.py — 新富邦e01 DDE 橋接 (v2.24)
+xqfap_feed.py — 新富邦e01 DDE 橋接 (v2.25)
 讀取 XQFAP DDE server 的 InOutRatio + TotalVolume + AvgPrice
 推送至 FastAPI server (main.py) /api/init + /api/feed
 
@@ -18,7 +18,6 @@ xqfap_feed.py — 新富邦e01 DDE 橋接 (v2.24)
   python xqfap_feed.py --discover   # 列出本月所有可用系列碼
 """
 
-import re
 import sys
 import time
 import ctypes
@@ -329,34 +328,10 @@ _fast_series:      set  = set()
 _bg_load_queue:    list = []
 _all_valid_series: list = []
 _series_times:     dict = {}   # module-level，供 _load_one_series 初始化新系列 timer
-_poll_ticks:       dict = {}   # per-series 輪詢計數，供分層輪詢使用
 
 # 輪詢間隔（秒，real time）
 _FAST_FULL = 1   # active 系列
 _SLOW_FULL = 60  # 非 active 系列（避免 active+非active 同輪，拖慢主畫面）
-
-# 分層輪詢：依距中心距離決定輪詢頻率
-# 近價平（<1500）：每輪；中間（1500-3000）：每2輪；深OTM（>3000）：每4輪
-_TIER1_DIST = 1500
-_TIER2_DIST = 3000
-
-# 中心價快取（避免每輪都 DDE call，30s 更新一次）
-_center_cache:      int   = 0
-_center_cache_time: float = 0.0
-
-
-def _get_center_cached() -> int:
-    """回傳快取的台指期中心履約價，每 30s 自動更新"""
-    global _center_cache, _center_cache_time
-    if time.time() - _center_cache_time > 30:
-        try:
-            price = _to_float(_req("FITX00.TF-Price"))
-            if price > 0:
-                _center_cache = int(round(price / STRIKE_STEP) * STRIKE_STEP)
-                _center_cache_time = time.time()
-        except Exception:
-            pass
-    return _center_cache
 
 _reinit_flag = threading.Event()
 
@@ -365,28 +340,11 @@ def _poll_meta(meta: dict, prev: dict, series: str = '') -> list:
     """
     輪詢一個系列的所有合約。
     優化①：TotalVolume 不變 → InOutRatio 數學上也不變 → 直接 skip（省一個 DDE call）
-    優化②：分層輪詢 — 按距中心距離決定頻率：近(<1500)每輪、中(1500-3000)每2輪、遠(>3000)每4輪
     """
-    # 取得本輪 tick 計數（per-series）
-    tick = _poll_ticks.get(series, 0) + 1
-    _poll_ticks[series] = tick
-
-    center = _get_center_cached()
-
     batch = []
     for symbol in list(meta.keys()):
         if _reinit_flag.is_set():
             break
-
-        # ── 優化②：分層輪詢（深 OTM/ITM 降頻，近價平維持全速）──
-        if center > 0:
-            m = re.search(r'[CP](\d+)$', symbol)
-            if m:
-                dist = abs(int(m.group(1)) - center)
-                if dist > _TIER2_DIST and tick % 4 != 0:
-                    continue   # 深 OTM/ITM：每 4 輪一次
-                elif dist > _TIER1_DIST and tick % 2 != 0:
-                    continue   # 中間區：每 2 輪一次
 
         try:
             # ── 優化①：先讀 TotalVolume；不變則 skip InOutRatio + AvgPrice ──
