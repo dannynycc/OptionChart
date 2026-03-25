@@ -12,9 +12,10 @@ class OptionData:
     symbol: str
     strike: int
     side: str          # 'C' = Call, 'P' = Put
-    trade_volume: int = 0     # 日+夜 合計
-    bid_match: int = 0
-    ask_match: int = 0
+    trade_volume: int = 0     # 日+夜 合計（TotalVolume，含開盤競價）
+    inout_ratio: float = 50.0 # 外盤比 0~100（直接來自 XQFAP InOutRatio = OutSize/TotalVolume×100）
+    bid_match: int = 0        # 外盤口數（Buy）= round(inout_ratio/100 × trade_volume），供顯示用
+    ask_match: int = 0        # 內盤口數（Sell）= trade_volume - bid_match，供顯示用
     trade_volume_day: int = -1  # 純日盤；-1 = 未提供（群益橋接），回退用合計值
     bid_match_day: int = -1
     ask_match_day: int = -1
@@ -27,21 +28,14 @@ class OptionData:
         return self.avg_price if self.avg_price > 0 else self.prev_close
 
     @property
-    def inout_ratio(self) -> float:
-        """外盤比 (0~100)：外盤(bid_match=totalBidMatch 買方主動) 占總量比例，與 XQFAP 一致"""
-        total = self.bid_match + self.ask_match
-        if total == 0:
-            return 50.0
-        return self.bid_match / total * 100
-
-    @property
     def net_position(self) -> float:
         """
-        淨CALL 或 淨PUT = nTAc - nTBc（內盤 - 外盤）
-        不依賴 trade_volume，因 trade_volume=nTQty 含開盤競價，
-        而 nTAc/nTBc 只累計方向性成交，兩者範圍不同。
+        淨口數 = ROUND((InOutRatio-50)/50 × TotalVolume, 0)
+        與 Excel Golden 公式一致。
+        InOutRatio = OutSize/TotalVolume×100，分母含開盤競價，
+        故不能用 OutSize-InSize（分母不同）。
         """
-        return float(self.bid_match - self.ask_match)
+        return round((self.inout_ratio - 50) / 50 * self.trade_volume)
 
 
 def parse_strike(symbol: str, name: str) -> int:
@@ -205,14 +199,12 @@ def build_strike_table(
         rows.append({
             "strike":    strike,
             # 日+夜 合計
-            "net_call":  c.net_position if c else 0,
-            "vol_call":  c.trade_volume if c else 0,
-            # Call 內外盤%：分子用 bid_match（Buy Call 比例）
-            "ratio_call": round(c.bid_match / (c.bid_match + c.ask_match) * 100, 1)
-                          if c and (c.bid_match + c.ask_match) > 0 else 50.0,
-            "net_put":   p.net_position if p else 0,
-            "vol_put":   p.trade_volume if p else 0,
-            "ratio_put": round(p.inout_ratio, 1) if p else 50.0,
+            "net_call":   c.net_position if c else 0,
+            "vol_call":   c.trade_volume if c else 0,
+            "ratio_call": round(c.inout_ratio, 1) if c else 50.0,
+            "net_put":    p.net_position if p else 0,
+            "vol_put":    p.trade_volume if p else 0,
+            "ratio_put":  round(p.inout_ratio, 1) if p else 50.0,
             "avg_price_call": round(c.avg_premium, 2) if c else 0.0,
             "ask_match_call": c.ask_match if c else 0,
             "bid_match_call": c.bid_match if c else 0,

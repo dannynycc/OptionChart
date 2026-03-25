@@ -153,11 +153,12 @@ async def api_init(payload: InitPayload):
 
 class FeedItem(BaseModel):
     symbol:           str
-    bid_match:        int    # 內盤累計口數（日+夜合計）
-    ask_match:        int    # 外盤累計口數（日+夜合計）
     trade_volume:     int
+    inout_ratio:      float = -1.0  # 外盤比 0~100（XQFAP InOutRatio）；-1 = 未提供
+    bid_match:        int = -1      # 外盤口數（顯示用，由 inout_ratio 推導）；-1 = 未提供
+    ask_match:        int = -1      # 內盤口數（顯示用）；-1 = 未提供
     avg_price:        float = 0.0
-    bid_match_day:    int = -1   # 純日盤；-1 = 未提供（群益橋接不送此欄）
+    bid_match_day:    int = -1
     ask_match_day:    int = -1
     trade_volume_day: int = -1
 
@@ -174,14 +175,24 @@ async def api_feed(updates: list[FeedItem], mode: str = "full"):
                 continue
             found += 1
             opt = target[u.symbol]
-            old_bid, old_ask, old_vol = opt.bid_match, opt.ask_match, opt.trade_volume
-            new_bid = u.bid_match    if u.bid_match    > 0 else opt.bid_match
-            new_ask = u.ask_match    if u.ask_match    > 0 else opt.ask_match
-            new_vol = u.trade_volume if u.trade_volume > 0 else opt.trade_volume
-            if new_bid != old_bid or new_ask != old_ask or new_vol != old_vol:
+            old_ratio = opt.inout_ratio
+            old_vol   = opt.trade_volume
+            new_vol   = u.trade_volume if u.trade_volume > 0 else old_vol
+            if u.inout_ratio >= 0:
+                # xqfap 路徑：inout_ratio 是主要欄位，bid/ask 由它推導
+                new_ratio = u.inout_ratio
+                new_bid   = round(new_ratio / 100 * new_vol)
+                new_ask   = new_vol - new_bid
+            else:
+                # fubon / 舊路徑：bid/ask 直接提供，反推 inout_ratio
+                new_bid   = u.bid_match  if u.bid_match  >= 0 else opt.bid_match
+                new_ask   = u.ask_match  if u.ask_match  >= 0 else opt.ask_match
+                new_ratio = new_bid / new_vol * 100 if new_vol > 0 else 50.0
+            if new_ratio != old_ratio or new_vol != old_vol:
+                opt.inout_ratio  = new_ratio
+                opt.trade_volume = new_vol
                 opt.bid_match    = new_bid
                 opt.ask_match    = new_ask
-                opt.trade_volume = new_vol
                 value_changed += 1
             if u.bid_match_day >= 0:
                 opt.bid_match_day    = u.bid_match_day

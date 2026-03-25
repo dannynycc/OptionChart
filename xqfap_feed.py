@@ -100,14 +100,14 @@ def _get_fields(symbol: str) -> "dict | None":
     """
     讀取單一合約的所有欄位。
     Name 無效 → 此合約不存在 → 回傳 None。
+    InOutRatio = OutSize/TotalVolume×100（XQFAP 定義，含開盤競價），是主要欄位。
     """
     name = _request(f"{symbol}.TF-Name")
     if not name:
         return None
     return {
-        'out_size':     _to_float(_request(f"{symbol}.TF-OutSize")),
-        'in_size':      _to_float(_request(f"{symbol}.TF-InSize")),
         'total_volume': _to_float(_request(f"{symbol}.TF-TotalVolume")),
+        'inout_ratio':  _to_float(_request(f"{symbol}.TF-InOutRatio")),
         'avg_price':    _to_float(_request(f"{symbol}.TF-AvgPrice")),
     }
 
@@ -216,9 +216,8 @@ def _push_snapshot(meta: dict, mode: str = "full"):
             continue
         snapshot.append({
             'symbol':       symbol,
-            'bid_match':    int(data['out_size']),
-            'ask_match':    int(data['in_size']),
             'trade_volume': int(data['total_volume']),
+            'inout_ratio':  data['inout_ratio'],
             'avg_price':    data['avg_price'],
         })
     if snapshot:
@@ -253,20 +252,18 @@ def _poll_meta(meta: dict, prev: dict) -> list:
             break
         if data is None:
             continue
-        new_bid = int(data['out_size'])
-        new_ask = int(data['in_size'])
-        new_vol = int(data['total_volume'])
-        new_avg = data['avg_price']
+        new_vol   = int(data['total_volume'])
+        new_ratio = data['inout_ratio']
+        new_avg   = data['avg_price']
         old = prev.get(symbol)
-        if old is None or (new_bid != old[0] or new_ask != old[1] or new_vol != old[2]):
+        if old is None or (new_ratio != old[0] or new_vol != old[1]):
             batch.append({
                 'symbol':       symbol,
-                'bid_match':    new_bid,
-                'ask_match':    new_ask,
                 'trade_volume': new_vol,
+                'inout_ratio':  new_ratio,
                 'avg_price':    new_avg,
             })
-            prev[symbol] = (new_bid, new_ask, new_vol)
+            prev[symbol] = (new_ratio, new_vol)
     return batch
 
 

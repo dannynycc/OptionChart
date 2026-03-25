@@ -1,5 +1,22 @@
 # Changelog
 
+## v2.7 (2026-03-25)
+
+### 修正：內外盤比率與淨口數公式（對齊 Excel Golden）
+
+**根本原因**：原先抓 `OutSize`（nTAc）和 `InSize`（nTBc），但 XQFAP 的 `InOutRatio = OutSize / TotalVolume × 100`，分母是 `TotalVolume`（含開盤競價），而 `OutSize + InSize` 不含開盤競價，兩個分母不同，導致淨口數和損益曲線偏高。
+
+- **`xqfap_feed.py`**：改拿 `TF-InOutRatio`（移除 `TF-OutSize` / `TF-InSize`），feed item 改送 `inout_ratio` + `trade_volume` + `avg_price`
+- **`calculator.py` `OptionData`**：
+  - 新增 `inout_ratio: float = 50.0` 為主要欄位（直接來自 XQFAP）
+  - `bid_match`（外盤/Buy）= `round(inout_ratio/100 × trade_volume)`（顯示用，由推導）
+  - `ask_match`（內盤/Sell）= `trade_volume - bid_match`（顯示用，由推導）
+  - `net_position` 改為 `round((inout_ratio - 50) / 50 × trade_volume)` ← 完全對應 Excel 公式
+  - `ratio_call` / `ratio_put` 改直接用 `inout_ratio`（不再用 bid/(bid+ask)）
+- **`main.py` `FeedItem`**：加 `inout_ratio` 欄位；`api_feed` 支援 xqfap 路徑（inout_ratio 為主）和 fubon 路徑（bid/ask 為主，反推 inout_ratio）向下相容
+
+---
+
 ## v2.6 (2026-03-25)
 
 ### 雙 Store 即時切換（全日盤 ↔ 日盤）
