@@ -219,17 +219,12 @@ def _get_center_price() -> int:
 
 # ── 合約探索（v2.7 架構：先 UP 再 DN）────────────────────────
 
-def _discover_contracts(center: int) -> "tuple[list, dict]":
+def _discover_contracts(center: int, full_series: str) -> "tuple[list, dict]":
     """
     pywin32 DDE 探索：先從 center 往上，再從 center-50 往下。
-    pywin32 無 item quota 限制，可探索完整 27300～37800 範圍。
+    full_series 為完整系列碼，如 "TX4N03"、"TXYN03"。
     """
-    series = XQ_SERIES
-    logger.info(
-        f"探索合約：TX4{series} 系列，從 {center} 向兩側展開"
-        f"（連續{MISS_LIMIT}個miss即停）"
-    )
-
+    logger.info(f"探索合約：{full_series} 系列，從 {center} 向兩側展開（連續{MISS_LIMIT}個miss即停）")
     found: dict[int, dict[str, bool]] = {}
 
     def _probe_direction(start: int, step: int):
@@ -238,7 +233,7 @@ def _discover_contracts(center: int) -> "tuple[list, dict]":
         while miss < MISS_LIMIT:
             hit = False
             for side in ('C', 'P'):
-                symbol = f"TX4{series}{side}{strike}"
+                symbol = f"{full_series}{side}{strike}"
                 name   = _req(f"{symbol}.TF-Name")
                 if name:
                     found.setdefault(strike, {})[side] = True
@@ -246,8 +241,8 @@ def _discover_contracts(center: int) -> "tuple[list, dict]":
             miss = 0 if hit else miss + 1
             strike += step
 
-    _probe_direction(center,              +STRIKE_STEP)   # UP
-    _probe_direction(center - STRIKE_STEP, -STRIKE_STEP)  # DN（不重複 center）
+    _probe_direction(center,              +STRIKE_STEP)
+    _probe_direction(center - STRIKE_STEP, -STRIKE_STEP)
 
     contracts, meta = [], {}
     found_c = found_p = 0
@@ -255,50 +250,49 @@ def _discover_contracts(center: int) -> "tuple[list, dict]":
         for side in ('C', 'P'):
             if not found[strike].get(side):
                 continue
-            symbol = f"TX4{series}{side}{strike}"
+            symbol = f"{full_series}{side}{strike}"
             contracts.append({'symbol': symbol, 'strike': strike,
                                'side': side, 'prev_close': 0.0})
             meta[symbol] = {'strike': strike, 'side': side}
-            if side == 'C':
-                found_c += 1
-            else:
-                found_p += 1
+            if side == 'C': found_c += 1
+            else:           found_p += 1
 
     if found:
         strikes = sorted(found.keys())
         logger.info(
-            f"探索完成：Call {found_c} 個，Put {found_p} 個，共 {len(contracts)} 個合約"
-            f"（{strikes[0]}～{strikes[-1]}）"
+            f"探索完成 {full_series}：Call {found_c} 個，Put {found_p} 個，"
+            f"共 {len(contracts)} 個合約（{strikes[0]}～{strikes[-1]}）"
         )
     return contracts, meta
 
 
 # ── HTTP 推送 ─────────────────────────────────────────────────
 
-def _post_init(contracts: list, mode: str = "full"):
+def _post_init(contracts: list, series: str, settlement_date: str = ""):
+    sd = settlement_date or SETTLEMENT_DATE
     try:
         r = requests.post(
             f"{SERVER_URL}/api/init",
-            json={'settlement_date': SETTLEMENT_DATE, 'contracts': contracts, 'mode': mode},
+            json={'settlement_date': sd, 'contracts': contracts, 'series': series},
             timeout=10,
         )
-        logger.info(f"POST /api/init [{mode}] → HTTP {r.status_code}，{len(contracts)} 個合約")
+        logger.info(f"POST /api/init [{series}] → HTTP {r.status_code}，{len(contracts)} 個合約")
     except Exception as e:
         logger.error(f"POST /api/init 失敗：{e}")
 
 
-def _post_feed(batch: list, mode: str = "full"):
+def _post_feed(batch: list, series: str):
     try:
-        r = requests.post(f"{SERVER_URL}/api/feed?mode={mode}", json=batch, timeout=5)
+        r = requests.post(f"{SERVER_URL}/api/feed?series={series}", json=batch, timeout=5)
         if r.status_code != 200:
-            logger.warning(f"POST /api/feed [{mode}] HTTP {r.status_code}")
+            logger.warning(f"POST /api/feed [{series}] HTTP {r.status_code}")
     except Exception as e:
         logger.warning(f"POST /api/feed 失敗：{e}")
 
 
 # ── 初始快照 ──────────────────────────────────────────────────
 
-def _push_snapshot(meta: dict, mode: str = "full"):
+def _push_snapshot(meta: dict, series: str):
     snapshot = []
     for symbol in meta:
         data = _get_fields(symbol)
@@ -311,16 +305,16 @@ def _push_snapshot(meta: dict, mode: str = "full"):
             'avg_price':    data['avg_price'],
         })
     if snapshot:
-        _post_feed(snapshot, mode=mode)
-        logger.info(f"初始快照推送 [{mode}]：{len(snapshot)} 筆")
+        _post_feed(snapshot, series=series)
+        logger.info(f"初始快照推送 [{series}]：{len(snapshot)} 筆")
 
 
 # ── 主輪詢迴圈 ────────────────────────────────────────────────
+# _all_metas: {series → meta_dict}，包含所有被追蹤系列的 full + day
+# _all_prevs: {series → prev_dict}，用於偵測變動
 
-_meta_full: dict = {}
-_meta_day:  dict = {}
-_prev_full: dict = {}
-_prev_day:  dict = {}
+_all_metas: dict = {}
+_all_prevs: dict = {}
 
 _reinit_flag = threading.Event()
 
@@ -355,32 +349,44 @@ def _poll_meta(meta: dict, prev: dict) -> list:
 
 
 def _poll_loop():
-    """永遠同時維護 full + day；full 每輪，day 每 3 輪"""
+    """輪詢所有被追蹤系列；full 系列每輪，day 系列每 3 輪"""
     tick     = 0
     day_tick = 0
     while True:
         _reinit_flag.wait(timeout=1.0)
         tick += 1
         if tick % 60 == 0:
-            logger.info(f"heartbeat: full={len(_meta_full)} day={len(_meta_day)} 合約")
+            logger.info(f"heartbeat: {[f'{s}={len(m)}' for s, m in _all_metas.items()]}")
 
         if _reinit_flag.is_set():
             _reinit_flag.clear()
             _reinit()
-            _push_snapshot(_meta_full, "full")
-            _push_snapshot(_meta_day,  "day")
+            for s, m in list(_all_metas.items()):
+                _push_snapshot(m, s)
             day_tick = 0
             continue
 
-        batch_full = _poll_meta(_meta_full, _prev_full)
-        if batch_full:
-            _post_feed(batch_full, mode="full")
+        # full 系列（含 N）：每輪輪詢
+        for series, meta in list(_all_metas.items()):
+            if 'N' not in series:
+                continue
+            if _reinit_flag.is_set():
+                break
+            batch = _poll_meta(meta, _all_prevs[series])
+            if batch:
+                _post_feed(batch, series)
 
+        # day 系列（不含 N）：每 3 輪輪詢一次
         day_tick += 1
-        if day_tick % 3 == 0 and not _reinit_flag.is_set():
-            batch_day = _poll_meta(_meta_day, _prev_day)
-            if batch_day:
-                _post_feed(batch_day, mode="day")
+        if day_tick % 3 == 0:
+            for series, meta in list(_all_metas.items()):
+                if 'N' in series:
+                    continue
+                if _reinit_flag.is_set():
+                    break
+                batch = _poll_meta(meta, _all_prevs[series])
+                if batch:
+                    _post_feed(batch, series)
 
 
 # ── 自動重新初始化排程 ────────────────────────────────────────
@@ -389,34 +395,47 @@ _REINIT_TIMES    = {(8, 43), (14, 58)}
 _last_reinit_key = ""
 
 
-def _build_day_meta(meta_full: dict) -> "tuple[list, dict]":
-    full_prefix = f"TX4{XQ_SERIES}"
-    day_prefix  = f"TX4{XQ_SERIES[1:]}"
+def _build_day_meta(meta_full: dict, full_series: str) -> "tuple[list, dict]":
+    """從 full meta 推導 day meta，例如 TX4N03 → TX403"""
+    day_series = full_series.replace('N', '')
     contracts, meta = [], {}
     for old_sym, info in meta_full.items():
-        suffix = old_sym[len(full_prefix):]
-        sym = f"{day_prefix}{suffix}"
+        suffix = old_sym[len(full_series):]   # e.g. "C32600"
+        sym    = f"{day_series}{suffix}"
         contracts.append({'symbol': sym, 'strike': info['strike'],
                            'side': info['side'], 'prev_close': 0.0})
         meta[sym] = {'strike': info['strike'], 'side': info['side']}
     return contracts, meta
 
 
+# 記錄正在追蹤的 full 系列清單（供 _reinit 使用）
+_tracked_full_series: list = []
+# 記錄各系列的結算日字串
+_series_sd: dict = {}
+
+
 def _reinit():
-    global _meta_full, _meta_day, _prev_full, _prev_day
-    center = _get_center_price()
-    contracts_full, new_meta_full = _discover_contracts(center)
-    if not contracts_full:
-        logger.error("重新初始化失敗：找不到任何合約")
-        return
-    contracts_day, new_meta_day = _build_day_meta(new_meta_full)
-    _post_init(contracts_full, mode="full")
-    _post_init(contracts_day,  mode="day")
-    _meta_full = new_meta_full
-    _meta_day  = new_meta_day
-    _prev_full = {}
-    _prev_day  = {}
-    logger.info("重新初始化完成（full + day）")
+    global _all_metas, _all_prevs
+    center   = _get_center_price()
+    new_metas = {}
+    new_prevs = {}
+    for full_series in _tracked_full_series:
+        contracts_full, meta_full = _discover_contracts(center, full_series)
+        if not contracts_full:
+            logger.error(f"重新初始化失敗：{full_series} 找不到合約")
+            continue
+        day_series    = full_series.replace('N', '')
+        contracts_day, meta_day = _build_day_meta(meta_full, full_series)
+        sd = _series_sd.get(full_series, SETTLEMENT_DATE)
+        _post_init(contracts_full, full_series, sd)
+        _post_init(contracts_day,  day_series,  sd)
+        new_metas[full_series] = meta_full
+        new_metas[day_series]  = meta_day
+        new_prevs[full_series] = {}
+        new_prevs[day_series]  = {}
+    _all_metas = new_metas
+    _all_prevs = new_prevs
+    logger.info(f"重新初始化完成：{list(_all_metas.keys())}")
 
 
 def _auto_reinit_scheduler():
@@ -543,12 +562,11 @@ def _do_discover():
 # ── 主程式 ────────────────────────────────────────────────────
 
 def main():
-    global _meta_full, _meta_day
+    global _all_metas, _all_prevs, _tracked_full_series, _series_sd
 
     if not _connect_dde():
         sys.exit(1)
 
-    # DDEML 連線（AvgPrice 專用，失敗不影響主流程）
     _connect_ddeml()
 
     if MODE == '--discover':
@@ -556,32 +574,70 @@ def main():
         return
 
     center = _get_center_price()
-    contracts_full, _meta_full = _discover_contracts(center)
 
-    if not contracts_full:
-        logger.error(
-            f"找不到任何合約！請確認 config_xqfap.py 的 XQ_SERIES（目前={XQ_SERIES!r}）。\n"
-            f"可執行 python xqfap_feed.py --discover 找出正確的系列碼。"
-        )
+    # 掃描有效系列（含結算日排序），取最近 2 個作為追蹤目標
+    valid_series = _scan_valid_series(center)
+    if not valid_series:
+        logger.error("找不到任何有效系列！請確認新富邦e01已開啟。")
         sys.exit(1)
 
-    contracts_day, _meta_day = _build_day_meta(_meta_full)
+    import taifex_calendar as tc
+    now   = datetime.datetime.now()
+    today = now.date()
 
-    _post_init(contracts_full, mode="full")
-    _post_init(contracts_day,  mode="day")
-    _push_snapshot(_meta_full, "full")
-    _push_snapshot(_meta_day,  "day")
+    # 選取結算日 >= 今天的最近 2 個系列
+    to_track = []
+    for series in valid_series:
+        n_idx  = series.index('N')
+        prefix = series[:n_idx]
+        month  = int(series[n_idx + 1:])
+        year   = now.year if month >= now.month else now.year + 1
+        sd     = tc.settlement_date(prefix, year, month)
+        if sd and sd >= today:
+            to_track.append((series, str(sd)))
+        if len(to_track) == 2:
+            break
 
-    # 掃描所有有效系列並推送合約下拉清單（已有 DDE 連線，複用）
-    valid_series = _scan_valid_series(center)
+    if not to_track:
+        logger.error("找不到有效系列（結算日 >= 今天）！")
+        sys.exit(1)
+
+    logger.info(f"追蹤系列：{[s for s, _ in to_track]}")
+    _tracked_full_series = [s for s, _ in to_track]
+
+    # 探索各系列合約並推送 init + 初始快照
+    _all_metas = {}
+    _all_prevs = {}
+    for full_series, sd_str in to_track:
+        _series_sd[full_series] = sd_str
+        contracts_full, meta_full = _discover_contracts(center, full_series)
+        if not contracts_full:
+            logger.warning(f"{full_series} 探索失敗，跳過")
+            continue
+
+        day_series    = full_series.replace('N', '')
+        contracts_day, meta_day = _build_day_meta(meta_full, full_series)
+
+        _all_metas[full_series] = meta_full
+        _all_metas[day_series]  = meta_day
+        _all_prevs[full_series] = {}
+        _all_prevs[day_series]  = {}
+
+        _post_init(contracts_full, full_series, sd_str)
+        _post_init(contracts_day,  day_series,  sd_str)
+        _push_snapshot(meta_full, full_series)
+        _push_snapshot(meta_day,  day_series)
+
+    if not _all_metas:
+        logger.error("所有系列探索失敗！")
+        sys.exit(1)
+
+    # 推送合約下拉清單
     _post_contracts(valid_series)
 
     threading.Thread(target=_auto_reinit_scheduler, daemon=True).start()
 
-    logger.info(
-        f"開始輪詢 full={len(_meta_full)} + day={len(_meta_day)} 合約"
-        f"（TX4{XQ_SERIES} / TX4{XQ_SERIES[1:]}）..."
-    )
+    logger.info(f"開始輪詢：{list(_all_metas.keys())}...")
     _poll_loop()
 
 

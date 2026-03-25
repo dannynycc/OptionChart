@@ -351,14 +351,16 @@ async function fetchContracts() {
     const sel = document.getElementById('contract-select');
     while (sel.options.length) sel.remove(0);
 
-    const today = new Date().toISOString().slice(0, 10); // "2026-03-25"
-    let defaultIdx = list.findIndex(c => c.settlement_date >= today);
+    const today = new Date().toISOString().slice(0, 10);
+    // 預設選 active_full 對應的那個；若沒有則選最近未到期
+    let defaultIdx = list.findIndex(c => c.series === data.active_full);
+    if (defaultIdx < 0) defaultIdx = list.findIndex(c => c.settlement_date >= today);
     if (defaultIdx < 0) defaultIdx = 0;
 
     list.forEach((c, i) => {
       const opt = document.createElement('option');
       opt.value = i;
-      opt.textContent = c.label;
+      opt.textContent = c.live ? c.label : `${c.label} ·`;  // live 合約不加標記，非 live 加點
       sel.appendChild(opt);
     });
 
@@ -366,17 +368,31 @@ async function fetchContracts() {
     document.getElementById('settlement-date').textContent =
       list[defaultIdx].settlement_display;
     _updateSeriesCode();
+    _switchSeries(list[defaultIdx]);  // 初始化時設定 active series
 
     sel.onchange = () => {
       const c = _contractsData[parseInt(sel.value)];
-      if (c) document.getElementById('settlement-date').textContent = c.settlement_display;
+      if (!c) return;
+      document.getElementById('settlement-date').textContent = c.settlement_display;
       _updateSeriesCode();
+      _switchSeries(c);
     };
     return true;
   } catch(e) {
     console.warn('fetchContracts failed', e);
     return false;
   }
+}
+
+function _switchSeries(c) {
+  if (!c || !c.live) return;
+  const seriesFull = c.series;
+  const seriesDay  = c.series.replace('N', '');
+  fetch('/api/set-series', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ series_full: seriesFull, series_day: seriesDay }),
+  }).catch(() => {});
 }
 
 function _updateSeriesCode() {
