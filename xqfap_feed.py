@@ -387,15 +387,28 @@ def _load_one_series(center: int, full_series: str, sd_str: str):
     _post_contracts(_all_valid_series)  # 通知前端移除 ·
 
 
+def _fetch_active_series() -> "tuple[str, str]":
+    """查詢 main.py 目前 active 系列，失敗回傳空字串"""
+    try:
+        r = requests.get(f"{SERVER_URL}/api/active-series", timeout=2)
+        d = r.json()
+        return d.get('full', ''), d.get('day', '')
+    except Exception:
+        return '', ''
+
+
 def _poll_loop():
     """
     輪詢所有被追蹤系列。
     Fast tier（前 3 系列）：全日盤每 1s、日盤每 3s。
     Slow tier（背景載入）：全日盤每 10s、日盤每 30s。
+    Active series（目前畫面顯示的）：無論 tier，強制每 1s（full）/ 3s（day）。
     背景佇列每輪處理一個（保留 DDE thread affinity）。
     """
     tick         = 0
     series_ticks: dict[str, int] = {}   # series → 上次輪詢的 tick
+    active_full  = ''
+    active_day   = ''
 
     while True:
         _reinit_flag.wait(timeout=1.0)
@@ -411,21 +424,27 @@ def _poll_loop():
                 _push_snapshot(m, s)
             continue
 
+        # 每 5 tick 查一次目前 active 系列（偵測用戶切換合約）
+        if tick % 5 == 0:
+            active_full, active_day = _fetch_active_series()
+
         # 背景佇列：每輪探索一個尚未載入的系列
         if _bg_load_queue:
             center = _get_center_price()
             full_series, sd_str = _bg_load_queue.pop(0)
             _load_one_series(center, full_series, sd_str)
 
-        # 輪詢所有已追蹤系列（依 fast/slow tier 決定間隔）
+        # 輪詢所有已追蹤系列
         for series, meta in list(_all_metas.items()):
             if _reinit_flag.is_set():
                 break
-            is_full  = 'N' in series
-            interval = (
-                (_FAST_FULL if is_full else _FAST_DAY) if series in _fast_series
-                else (_SLOW_FULL if is_full else _SLOW_DAY)
-            )
+            is_full = 'N' in series
+            # Active 系列強制 fast rate；其餘依 tier 決定
+            is_active = (series == active_full or series == active_day)
+            if is_active or series in _fast_series:
+                interval = _FAST_FULL if is_full else _FAST_DAY
+            else:
+                interval = _SLOW_FULL if is_full else _SLOW_DAY
             if tick - series_ticks.get(series, 0) < interval:
                 continue
             series_ticks[series] = tick

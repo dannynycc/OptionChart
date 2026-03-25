@@ -1,5 +1,45 @@
 # Changelog
 
+## v2.19 (2026-03-25)
+
+### 修正：· 未消失前點進去應顯示空白；active 系列強制每秒更新
+
+**Bug 1：提早點進 `·` 系列，卻看到舊資料**
+- 根本原因：`_post_init()` 一呼叫就讓 `c['series'] in stores` 為 True，`/api/contracts` 立刻回傳 `live=True`，但 snapshot 尚未推送完畢。app.js 5s poll 立刻移除 `·`，用戶進去看到大片空格。
+- **Fix（main.py）**：`live` 改判 `_last_updated.get(fs, 0) > 0`，確保至少收到一次 feed 更新才算 ready。
+
+**Bug 2：切換到 slow tier 合約，資料每 10s 才更新**
+- 根本原因：背景載入的合約（slow tier）DDE 輪詢間隔為 10s，用戶切換後更新頻率沒跟著升。
+- **Fix（main.py + xqfap_feed.py）**：新增 `GET /api/active-series` 端點；`_poll_loop` 每 5 tick 查一次，active 系列強制以 fast rate（全日盤 1s / 日盤 3s）輪詢。
+
+**新功能：`·` 系列空白等待 + 自動切換**
+- 點選 `·` 未 ready 系列 → `_clearDisplay()` 清空 table + chart，`_viewingNonLive = true`
+- 停留畫面期間 WebSocket 資料不更新 table/chart（只維持連線燈）
+- 5s poll 偵測到 `·` 消失 → 自動呼叫 `_switchSeries(c)`，資料一次全部刷入
+
+**變更檔案**：
+- **`main.py`**：`api_contracts_get` live 判斷改用 `_last_updated > 0`；新增 `GET /api/active-series`
+- **`xqfap_feed.py`**：新增 `_fetch_active_series()`；`_poll_loop` active 系列強制 fast rate
+- **`static/app.js`**：`_viewingNonLive` 旗標；`_clearDisplay()`；`handleData` 暫停更新；5s poll 偵測到 live 後自動切換
+
+---
+
+## v2.18 (2026-03-25)
+
+### 新增：Progressive Loading — 前3系列 fast tier，其餘背景 slow tier 載入
+
+**功能說明**：
+- 啟動時掃描所有有效系列，前 3 個（結算日最近）立即探索並初始化（fast tier：全日盤每 1s、日盤每 3s）
+- 其餘系列加入 `_bg_load_queue`，`_poll_loop` 每輪處理一個（slow tier：全日盤每 10s、日盤每 30s）；背景在同一 thread 執行保留 DDE thread affinity
+- 背景系列完成探索+init+snapshot 後，呼叫 `_post_contracts()` 通知前端移除 `·`
+- app.js 每 5s 輪詢 `/api/contracts`，偵測新 live 系列即更新下拉選單文字
+
+**變更檔案**：
+- **`xqfap_feed.py`**：新增 `_fast_series`、`_bg_load_queue`、`_all_valid_series` 全域；`_load_one_series()` helper；`_poll_loop` 改用 per-series tick counter；`main()` 前3 fast + 其餘 bg queue
+- **`static/app.js`**：新增 5s interval 輪詢 `/api/contracts` 刷新 live 狀態
+
+---
+
 ## v2.16 (2026-03-25)
 
 ### 新增：工具列合約下拉選單 + 期交所代號欄

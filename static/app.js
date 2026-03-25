@@ -337,7 +337,20 @@ function updateTable(rows) {
 }
 
 // ── 合約下拉選單 ───────────────────────────────────────
-let _contractsData = [];
+let _contractsData    = [];
+let _viewingNonLive   = false;  // 用戶正在查看尚未 ready 的系列
+let _viewingNonLiveIdx = -1;    // 對應 _contractsData 的 index
+
+function _clearDisplay() {
+  document.getElementById('strike-table-body').textContent = '';
+  _chartStrikes = [];
+  _chartPnl     = [];
+  chart.setOption({ series: [
+    { name: '_pos',    data: [] },
+    { name: '_neg',    data: [] },
+    { name: '合併損益', data: [] },
+  ]}, false);
+}
 
 async function fetchContracts() {
   try {
@@ -371,11 +384,21 @@ async function fetchContracts() {
     _switchSeries(list[defaultIdx]);  // 初始化時設定 active series
 
     sel.onchange = () => {
-      const c = _contractsData[parseInt(sel.value)];
+      const idx = parseInt(sel.value);
+      const c   = _contractsData[idx];
       if (!c) return;
       document.getElementById('settlement-date').textContent = c.settlement_display;
       _updateSeriesCode();
-      _switchSeries(c);
+      if (!c.live) {
+        // 系列尚未 ready：清空畫面，等待背景載入完成
+        _viewingNonLive    = true;
+        _viewingNonLiveIdx = idx;
+        _clearDisplay();
+      } else {
+        _viewingNonLive    = false;
+        _viewingNonLiveIdx = -1;
+        _switchSeries(c);
+      }
     };
     return true;
   } catch(e) {
@@ -430,6 +453,13 @@ setInterval(async () => {
         _contractsData[i].live = true;
         anyNewLive = true;
         if (sel.options[i]) sel.options[i].textContent = c.label;  // 移除 ·
+        // 用戶正在等待這個系列 ready → 自動切換並恢復顯示
+        if (_viewingNonLive && _viewingNonLiveIdx === i) {
+          _viewingNonLive    = false;
+          _viewingNonLiveIdx = -1;
+          _switchSeries(c);
+          console.log(`系列 ${c.label} 已 ready，自動切換`);
+        }
       }
     });
     if (anyNewLive) {
@@ -481,6 +511,11 @@ function handleData(data, source) {
     btnFull.classList.toggle('active', data.session_mode === 'full');
     btnDay.classList.toggle('active',  data.session_mode === 'day');
     _updateSeriesCode();
+  }
+  // 正在查看未 ready 的系列：暫停 table/chart 更新，只維持連線狀態
+  if (_viewingNonLive) {
+    updateStatus(data.status, null);
+    return;
   }
   updateTable(data.table);
   updateChart(data.pnl, modeChanged);

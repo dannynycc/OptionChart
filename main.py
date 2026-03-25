@@ -245,6 +245,11 @@ async def api_set_session(payload: SessionModePayload):
 async def api_get_session():
     return {"mode": _session_mode}
 
+@app.get("/api/active-series")
+async def api_active_series():
+    """供 xqfap_feed.py 查詢目前 active 系列，以決定 DDE 輪詢頻率"""
+    return {"full": _active_full, "day": _active_day}
+
 # ── 合約系列切換端點 ──────────────────────────────────────────
 
 class SeriesPayload(BaseModel):
@@ -279,11 +284,16 @@ async def api_contracts_post(payload: ContractsPayload):
 
 @app.get("/api/contracts")
 async def api_contracts_get():
-    # 在每筆合約加上 live 旗標（是否已在 stores 中）
+    # live = 該系列已收到至少一次 feed（snapshot 完成才算 ready，避免空資料時就移除 ·）
     result = []
     for c in _contracts_cache:
-        c2 = dict(c)
-        c2['live'] = c['series'] in stores
+        c2   = dict(c)
+        fs   = c['series']                 # full series e.g. "TX1N04"
+        ds   = fs.replace('N', '')         # day series  e.g. "TX104"
+        c2['live'] = (
+            _last_updated.get(fs, 0) > 0 or
+            _last_updated.get(ds, 0) > 0
+        )
         result.append(c2)
     return {"contracts": result, "active_full": _active_full, "active_day": _active_day}
 
