@@ -328,11 +328,9 @@ _fast_series:      set  = set()
 _bg_load_queue:    list = []
 _all_valid_series: list = []
 
-# 輪詢間隔（單位：tick，1 tick ≈ 1 秒）
-_FAST_FULL = 1
-_FAST_DAY  = 3
-_SLOW_FULL = 10
-_SLOW_DAY  = 30
+# 輪詢間隔（秒，real time）
+_FAST_FULL = 1   # active 系列
+_SLOW_FULL = 10  # 非 active 系列
 
 _reinit_flag = threading.Event()
 
@@ -343,17 +341,15 @@ def _poll_meta(meta: dict, prev: dict) -> list:
         if _reinit_flag.is_set():
             break
         try:
-            data = _get_fields(symbol)
+            # 跳過 Name 查詢（探索階段已確認存在，省 25% DDE calls）
+            new_vol   = int(_to_float(_req(f"{symbol}.TF-TotalVolume")))
+            new_ratio = _to_float(_req(f"{symbol}.TF-InOutRatio"))
+            new_avg   = _get_avg_price(symbol)
         except Exception:
             logger.warning("DDE 讀取異常，嘗試重連...")
             if _connect_dde():
                 logger.info("DDE 重連成功")
             break
-        if data is None:
-            continue
-        new_vol   = int(data['total_volume'])
-        new_ratio = data['inout_ratio']
-        new_avg   = data['avg_price']
         old = prev.get(symbol)
         if old is None or (new_ratio != old[0] or new_vol != old[1]):
             batch.append({
@@ -397,60 +393,77 @@ def _fetch_active_series() -> "tuple[str, str]":
         return '', ''
 
 
+def _is_night_session() -> bool:
+    """夜盤時段：15:00 ~ 隔日 05:00，日盤資料不變，不需輪詢"""
+    h = datetime.datetime.now().hour
+    return h >= 15 or h < 5
+
+
 def _poll_loop():
     """
-    輪詢所有被追蹤系列。
-    Fast tier（前 3 系列）：全日盤每 1s、日盤每 3s。
-    Slow tier（背景載入）：全日盤每 10s、日盤每 30s。
-    Active series（目前畫面顯示的）：無論 tier，強制每 1s（full）/ 3s（day）。
-    背景佇列每輪處理一個（保留 DDE thread affinity）。
+    輪詢所有被追蹤系列（time-based，非 tick）。
+    Active series：_FAST_FULL 秒
+    非 Active series：_SLOW_FULL 秒，每輪至多輪詢一個（防堆積）
+    夜盤時段（15:00~05:00）：日盤系列只做初始快照，不再輪詢
     """
-    tick         = 0
-    series_ticks: dict[str, int] = {}   # series → 上次輪詢的 tick
+    series_times: dict[str, float] = {}
     active_full  = ''
     active_day   = ''
+    hb_tick      = 0
 
     while True:
         _reinit_flag.wait(timeout=1.0)
-        tick += 1
-        if tick % 60 == 0:
+        hb_tick += 1
+        if hb_tick % 60 == 0:
             logger.info(f"heartbeat: {[f'{s}={len(m)}' for s, m in _all_metas.items()]}")
 
         if _reinit_flag.is_set():
             _reinit_flag.clear()
             _reinit()
-            series_ticks.clear()
+            series_times.clear()
             for s, m in list(_all_metas.items()):
                 _push_snapshot(m, s)
             continue
 
-        # 每 5 tick 查一次目前 active 系列（偵測用戶切換合約）
-        if tick % 5 == 0:
-            active_full, active_day = _fetch_active_series()
+        # 每 tick 查一次 active 系列（切換合約後立刻升速）
+        active_full, active_day = _fetch_active_series()
 
-        # 背景佇列：每輪探索一個尚未載入的系列
         if _bg_load_queue:
             center = _get_center_price()
             full_series, sd_str = _bg_load_queue.pop(0)
             _load_one_series(center, full_series, sd_str)
 
-        # 輪詢所有已追蹤系列
+        now   = time.time()
+        night = _is_night_session()
+
+        # ── Active 系列優先輪詢 ──────────────────────────────
+        for series in [active_full, active_day]:
+            if not series or series not in _all_metas:
+                continue
+            if night and 'N' not in series:
+                continue
+            if _reinit_flag.is_set():
+                break
+            if now - series_times.get(series, 0) >= _FAST_FULL:
+                series_times[series] = now
+                batch = _poll_meta(_all_metas[series], _all_prevs[series])
+                if batch:
+                    _post_feed(batch, series)
+
+        # ── 非 Active 系列：每輪只輪詢一個（防止多個同時到期堆積）──
         for series, meta in list(_all_metas.items()):
             if _reinit_flag.is_set():
                 break
-            is_full = 'N' in series
-            # Active 系列強制 fast rate；其餘依 tier 決定
-            is_active = (series == active_full or series == active_day)
-            if is_active or series in _fast_series:
-                interval = _FAST_FULL if is_full else _FAST_DAY
-            else:
-                interval = _SLOW_FULL if is_full else _SLOW_DAY
-            if tick - series_ticks.get(series, 0) < interval:
+            if series in (active_full, active_day):
                 continue
-            series_ticks[series] = tick
-            batch = _poll_meta(meta, _all_prevs[series])
-            if batch:
-                _post_feed(batch, series)
+            if night and 'N' not in series:
+                continue
+            if now - series_times.get(series, 0) >= _SLOW_FULL:
+                series_times[series] = now
+                batch = _poll_meta(meta, _all_prevs[series])
+                if batch:
+                    _post_feed(batch, series)
+                break
 
 
 # ── 自動重新初始化排程 ────────────────────────────────────────

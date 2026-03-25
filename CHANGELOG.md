@@ -1,5 +1,36 @@
 # Changelog
 
+## v2.21 (2026-03-26)
+
+### xqfap_feed.py 輪詢效能優化
+
+**Fix ①：移除 `_poll_meta` Name 查詢**
+- 原本每個 symbol 輪詢時都先查 `TF-Name` 做 validity check（探索階段已確認存在，重複查詢）
+- 移除後每個 symbol 從 4 次 DDE call 降為 3 次，節省 ~25% DDE 呼叫量
+
+**輪詢速率統一**
+- 原本 full/day 分開設定（`_FAST_FULL=1s/_FAST_DAY=3s`，`_SLOW_FULL=10s/_SLOW_DAY=30s`）
+- 改為統一：active 系列 1s，非 active 系列 10s（full/day 一視同仁）
+
+**時間基準改為 `time.time()`（time-based）**
+- 原本用 tick 計數器（`series_ticks`），每 tick ≈ 1s（但 DDE 阻塞時 1 tick 實際可達 13s+）
+- 改用 `time.time()` 真實秒數，interval 語義回歸「幾秒輪詢一次」
+- 非 active 系列每輪至多輪詢一個（防止多個同時到期堆積，避免依序輪動）
+
+**Active 系列偵測加速**
+- 原本每 5 tick 才查一次 `/api/active-series`，切換合約最多延遲 5s 才升速
+- 改為每 tick 查一次，切換後下一輪（≤1s）立刻升速
+
+**夜盤優化：日盤系列停止輪詢**
+- 新增 `_is_night_session()`（15:00~05:00）
+- 夜盤期間日盤資料不變，跳過日盤系列輪詢，節省約一半 DDE 呼叫
+- 啟動時初始快照仍完整推送；08:43 盤前 reinit 時自動刷新
+
+**變更檔案**：
+- **`xqfap_feed.py`**：移除 Name check；統一速率常數；time-based `series_times`；active 每 tick 查；新增 `_is_night_session()`；`_poll_loop` 重構（active 優先 + 非 active 每輪一個）
+
+---
+
 ## v2.20 (2026-03-25)
 
 ### 合約篩選精簡 + 圖表 UX 修正 + 下拉選單提早出現 + UI 微調
