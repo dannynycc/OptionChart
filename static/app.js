@@ -134,6 +134,21 @@ chart.getZr().on('mousemove', function(e) {
 
 chart.getZr().on('mouseout', _clearHover);
 
+// ── 滑鼠滾輪縮放（調整 noUiSlider X 軸範圍） ──────────
+chartDom.addEventListener('wheel', function(e) {
+  e.preventDefault();
+  if (!_nouiSlider || _chartStrikes.length === 0) return;
+  const [curMin, curMax] = _nouiSlider.get().map(Number);
+  const center   = (curMin + curMax) / 2;
+  const factor   = e.deltaY > 0 ? 1.15 : 0.87;  // 向下放大、向上縮小
+  const fullMin  = Math.min(..._chartStrikes);
+  const fullMax  = Math.max(..._chartStrikes);
+  const newRange = Math.max((curMax - curMin) * factor, 200);  // 最小 200 點
+  const newMin   = Math.max(fullMin, center - newRange / 2);
+  const newMax   = Math.min(fullMax, center + newRange / 2);
+  _nouiSlider.set([newMin, newMax]);
+}, { passive: false });
+
 // ── 全日盤 / 日盤(一般) 切換 ──────────────────────────
 const showDayOnly = false;  // 保留供 _day suffix 邏輯使用，固定 false
 
@@ -236,8 +251,9 @@ function updateChart(pnl, forceReset = false) {
   }, false);
 
   _initSlider(minS, maxS, forceReset);
-  // 模式切換時 slider 可能不觸發 update（範圍未變），直接強制重算 Y 軸
-  if (forceReset) _recalcYAxis(minS, maxS);
+  // 每次資料更新都重算 Y 軸：合約切換、盤別切換、一般 tick 皆 fit
+  const [curMin, curMax] = _nouiSlider ? _nouiSlider.get().map(Number) : [minS, maxS];
+  _recalcYAxis(curMin, curMax);
 }
 
 // ── DOM helper ────────────────────────────────────────

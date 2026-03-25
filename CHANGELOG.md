@@ -1,5 +1,33 @@
 # Changelog
 
+## v2.20 (2026-03-25)
+
+### 合約篩選精簡 + 圖表 UX 修正 + 下拉選單提早出現 + UI 微調
+
+**合約追蹤精簡（xqfap_feed.py）**：
+- `_scan_valid_series` 從 12 個月（120 probe）縮短為當月+下個月（20 probe）
+- `main()` 新增篩選：最近 3 個週選（TX 非 TXO）+ 最近 1 個月選（TXO），其餘不追蹤
+- 移除 `_fast_series.add()`，改由 `is_active` 決定輪詢速率（active=1s/3s，非 active=10s/30s），避免 4 組全速輪詢消耗大量 DDE 呼叫
+
+**下拉選單提早出現**：
+- 原本 4 個合約全部探索完才推送 `_post_contracts`，導致下拉顯示「載入中...」很久
+- 改為每探索完一個合約就推送一次，第一個 ready 即顯示（其餘帶 `•`）
+
+**圖表 UX 修正（static/app.js）**：
+- **Y 軸不自動 fit**：切換合約/盤別後 Y 軸不跟著資料縮放，需拖動 slider 才 fit。根本原因：`_recalcYAxis` 只在 `forceReset=true` 時才呼叫。修正為每次 `updateChart` 都以 slider 當前位置重算 Y 軸
+- **滑鼠滾輪失效**：圖表無任何 wheel 事件處理。新增 wheel listener，調整 noUiSlider X 範圍（向上縮小 factor=0.87、向下放大 factor=1.15），Y 軸跟著 slider `update` 事件自動重算
+
+**UI 微調（static/style.css）**：
+- T 字表欄位 padding 從 4px 縮為 2px（欄間距更緊湊）
+- 左側面板預設寬度從 1060px 改為 862px（豎線預設落在 Put均價 與 Call損益(億) 之間）
+
+**變更檔案**：
+- **`xqfap_feed.py`**：`_scan_valid_series` 縮至 2 個月；`main()` 3週+1月篩選；每合約完成即推送清單；移除 `_fast_series.add`
+- **`static/app.js`**：`updateChart` 永遠重算 Y 軸；新增 wheel 縮放
+- **`static/style.css`**：padding 2px；左側寬度 862px
+
+---
+
 ## v2.19 (2026-03-25)
 
 ### 修正：· 未消失前點進去應顯示空白；active 系列強制每秒更新
