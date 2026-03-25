@@ -1,5 +1,25 @@
 # Changelog
 
+## v2.26 (2026-03-26)
+
+### xqfap_feed.py 多執行緒 DDEML 輪詢池
+
+**架構改變：`_poll_meta` 由 pywin32 單執行緒 → DDEML ThreadPoolExecutor**
+- `_NUM_DDEML_WORKERS = 3`：3 個 worker thread，各自持有獨立 DDEML 連線（threading.local lazy init）
+- `_poll_meta` 將 symbols 以 `[i::3]` 切分，平行提交 3 個 future，匯集結果
+- 每個 worker 讀 TotalVolume + InOutRatio + AvgPrice 全走 DDEML（不再分 pywin32/DDEML）
+- InOutRatio DDEML 回傳帶 `%` 後綴，`_req_thread` 統一 `rstrip('%')` 處理
+- `_poll_meta_single` 保留為 fallback（executor 未就緒時使用 pywin32）
+
+**可行性依據**：`--test-ddeml` 模式驗證 XQFAP 支援多條並行 DDEML 連線（3/4 workers ok=18 fail=0）
+
+**預估效果**：活躍盤 ~4-5s/輪 → ~1.5-2s/輪（3x 加速）
+
+**變更檔案**：
+- **`xqfap_feed.py`**：`import concurrent.futures`；`_NUM_DDEML_WORKERS/threading.local/_poll_executor`；`_thread_ddeml_connect/_req_thread/_poll_meta_chunk/_init_poll_executor()`；`_poll_meta` 多執行緒版；`_poll_meta_single` fallback
+
+---
+
 ## v2.25 (2026-03-26)
 
 ### xqfap_feed.py 移除分層輪詢，保留 vol-skip 優化
