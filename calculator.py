@@ -201,10 +201,10 @@ def build_strike_table(
             # 日+夜 合計
             "net_call":   c.net_position if c else 0,
             "vol_call":   c.trade_volume if c else 0,
-            "ratio_call": round(c.inout_ratio, 1) if c else 50.0,
+            "ratio_call": round(c.inout_ratio, 2) if c else 50.0,
             "net_put":    p.net_position if p else 0,
             "vol_put":    p.trade_volume if p else 0,
-            "ratio_put":  round(p.inout_ratio, 1) if p else 50.0,
+            "ratio_put":  round(p.inout_ratio, 2) if p else 50.0,
             "avg_price_call": round(c.avg_premium, 2) if c else 0.0,
             "ask_match_call": c.ask_match if c else 0,
             "bid_match_call": c.bid_match if c else 0,

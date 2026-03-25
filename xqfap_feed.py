@@ -13,16 +13,20 @@ xqfap_feed.py — 新富邦e01 DDE 橋接
   XQ_SERIES       = "N03"           # 每週換倉時更新（N=W4, 03=March）
   SETTLEMENT_DATE = "20260325"      # 結算日
   SERVER_URL      = "http://localhost:8000"
+
+【DDE 實作說明】
+  直接使用 Windows DDEML API（user32.dll + ctypes），不用 pywin32 dde 模組。
+  原因：pywin32 dde 的 Request() 有 bug，讀取 CF_TEXT 回應時截斷小數位
+  （例如 '0.4' 只讀到 '0.'，'93.3' 只讀到 '93.'），導致 AvgPrice 精度遺失。
+  DDEML 直接呼叫用 DdeGetData 查大小後再分配緩衝，可正確讀取完整字串。
 """
 
 import sys
 import time
+import ctypes
 import logging
 import threading
 import datetime
-
-import win32ui  # noqa: F401 — 必須先 import，dde 依賴它
-import dde
 
 try:
     import requests
@@ -53,35 +57,95 @@ MISS_LIMIT      = 10     # 連續找不到幾個就停止往該方向探索
 
 MODE = sys.argv[1] if len(sys.argv) > 1 else ''
 
-# ── DDE 連線 ──────────────────────────────────────────────────
+# ── DDEML API（user32.dll）宣告 ───────────────────────────────
 
-_srv  = None
-_conv = None
+_user32 = ctypes.WinDLL("user32")
+
+_PFNCALLBACK = ctypes.WINFUNCTYPE(
+    ctypes.c_void_p,   # return HDDEDATA
+    ctypes.c_uint,     # uType
+    ctypes.c_uint,     # uFmt
+    ctypes.c_void_p,   # hconv
+    ctypes.c_void_p,   # hsz1
+    ctypes.c_void_p,   # hsz2
+    ctypes.c_void_p,   # hdata
+    ctypes.c_size_t,   # dwData1
+    ctypes.c_size_t,   # dwData2
+)
+_DWORD = ctypes.c_ulong
+
+_CF_TEXT         = 1
+_XTYP_REQUEST    = 0x20B0
+_DDE_TIMEOUT_MS  = 5000
+_CP_WINUNICODE   = 1200
+_APPCMD_CLIENTONLY = 0x0010
+
+# 讓 callback 不被 GC 回收
+def _null_cb(a, b, c, d, e, f, g, h):
+    return ctypes.cast(ctypes.c_void_p(0), ctypes.c_void_p)
+_dde_callback = _PFNCALLBACK(_null_cb)
+
+# ── DDE 連線狀態 ──────────────────────────────────────────────
+
+_dde_inst  = _DWORD(0)   # DWORD idInst
+_dde_hconv = None        # HCONV
 
 
 def _connect_dde() -> bool:
-    """建立 XQFAP DDE 連線，成功回傳 True"""
-    global _srv, _conv
+    """建立 XQFAP DDEML 連線，成功回傳 True"""
+    global _dde_inst, _dde_hconv
     try:
-        _srv = dde.CreateServer()
-        _srv.Create("XQFAPFeed")
-        _conv = dde.CreateConversation(_srv)
-        _conv.ConnectTo("XQFAP", "Quote")
-        logger.info("XQFAP DDE 連線成功")
+        # 初始化 DDEML
+        ret = _user32.DdeInitializeW(
+            ctypes.byref(_dde_inst), _dde_callback, _APPCMD_CLIENTONLY, 0
+        )
+        if ret != 0:
+            logger.error(f"DdeInitializeW 失敗，ret={ret}")
+            return False
+
+        # 建立 service / topic string handle
+        hsz_svc   = _user32.DdeCreateStringHandleW(_dde_inst.value, "XQFAP", _CP_WINUNICODE)
+        hsz_topic = _user32.DdeCreateStringHandleW(_dde_inst.value, "Quote", _CP_WINUNICODE)
+
+        # 連線
+        hconv = _user32.DdeConnect(_dde_inst.value, hsz_svc, hsz_topic, None)
+        _user32.DdeFreeStringHandle(_dde_inst.value, hsz_svc)
+        _user32.DdeFreeStringHandle(_dde_inst.value, hsz_topic)
+
+        if not hconv:
+            err = _user32.DdeGetLastError(_dde_inst.value)
+            logger.error(f"DdeConnect 失敗，error={err}，請確認新富邦e01 軟體已開啟")
+            return False
+
+        _dde_hconv = hconv
+        logger.info("XQFAP DDE 連線成功（DDEML）")
         return True
     except Exception as e:
         logger.error(f"XQFAP DDE 連線失敗：{e}")
-        logger.error("請確認新富邦e01 軟體已開啟")
         return False
 
 
 def _request(item: str) -> str:
-    """DDE Request，失敗或回傳 '-' 均視為無效，回傳空字串"""
+    """
+    DDEML XTYP_REQUEST，失敗或回傳 '-' 均視為無效，回傳空字串。
+    使用 DdeGetData 先查大小再分配緩衝，正確保留小數位（修正 pywin32 截斷問題）。
+    """
     try:
-        val = _conv.Request(item)
-        if val is None:
+        hsz_item = _user32.DdeCreateStringHandleW(_dde_inst.value, item, _CP_WINUNICODE)
+        dr = _DWORD(0)
+        hdata = _user32.DdeClientTransaction(
+            None, 0, _dde_hconv, hsz_item,
+            _CF_TEXT, _XTYP_REQUEST, _DDE_TIMEOUT_MS, ctypes.byref(dr)
+        )
+        _user32.DdeFreeStringHandle(_dde_inst.value, hsz_item)
+        if not hdata:
             return ''
-        val = str(val).strip()
+        # 查大小 → 分配 → 讀資料
+        sz = _user32.DdeGetData(hdata, None, 0, 0)
+        buf = ctypes.create_string_buffer(sz) if sz > 0 else ctypes.create_string_buffer(1)
+        _user32.DdeGetData(hdata, buf, sz, 0)
+        _user32.DdeFreeDataHandle(hdata)
+        val = buf.raw.rstrip(b'\x00').decode('cp950', errors='replace').strip()
         return '' if val == '-' else val
     except Exception:
         return ''
@@ -89,8 +153,8 @@ def _request(item: str) -> str:
 
 def _to_float(s: str) -> float:
     try:
-        return float(s)
-    except (ValueError, TypeError):
+        return float(s.rstrip('%'))
+    except (ValueError, TypeError, AttributeError):
         return 0.0
 
 
@@ -233,7 +297,7 @@ _prev_full: dict = {}
 _prev_day:  dict = {}
 
 # 背景 thread 設旗，主 thread (_poll_loop) 偵測後在主 thread 做 reinit
-# （DDE 有 thread affinity，只能在建立 _conv 的 thread 上 Request）
+# （DDE 有 thread affinity，只能在建立 _dde_hconv 的 thread 上 Request）
 _reinit_flag = threading.Event()
 
 

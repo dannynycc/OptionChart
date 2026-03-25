@@ -1,5 +1,22 @@
 # Changelog
 
+## v2.8 (2026-03-25)
+
+### 修正：均價（AvgPrice）小數精度遺失
+
+**根本原因**：pywin32 `dde` 模組的 `Conversation.Request()` 在讀取 CF_TEXT 回應時，因緩衝區處理缺陷導致小數位被截斷（`'0.4'` 讀成 `'0.'`，`'93.3'` 讀成 `'93.'`）。實測：OTM 低價合約均價應為 0.3～0.9 點，但實際收到 0，造成損益曲線計算錯誤。
+
+**修正**：`xqfap_feed.py` 改用 Windows DDEML API（`user32.dll` + ctypes），直接呼叫 `DdeClientTransaction` + `DdeGetData`，先查資料大小再分配緩衝，完整讀取字串。無需 pywin32 `dde` 模組。
+
+- **`xqfap_feed.py`**：
+  - 移除 `import win32ui` / `import dde`，改用 `ctypes.WinDLL("user32")`
+  - 新增 DDEML 宣告（`_PFNCALLBACK`, `_dde_callback`, `_dde_inst`, `_dde_hconv`）
+  - `_connect_dde()`：改用 `DdeInitializeW` + `DdeConnect`
+  - `_request()`：改用 `DdeClientTransaction` + `DdeGetData`（正確保留小數位）
+  - `_to_float()`：加 `.rstrip('%')` 處理 DDEML 回傳的百分比格式（`'44.84%'`）
+
+---
+
 ## v2.7 (2026-03-25)
 
 ### 修正：內外盤比率與淨口數公式（對齊 Excel Golden）
