@@ -122,6 +122,7 @@ class InitPayload(BaseModel):
     settlement_date: str
     contracts: list[ContractMeta]
     mode: str = "full"   # "full" | "day"
+    merge: bool = False  # True = 疊加（不清空 store）；False = 取代
 
 @app.post("/api/init")
 async def api_init(payload: InitPayload):
@@ -129,7 +130,8 @@ async def api_init(payload: InitPayload):
     global _settlement_date, _subscribed_count_full, _subscribed_count_day, _connected
     target = store_full if payload.mode == 'full' else store_day
     with _lock:
-        target.clear()
+        if not payload.merge:
+            target.clear()
         for c in payload.contracts:
             target[c.symbol] = OptionData(
                 symbol     = c.symbol,
@@ -139,15 +141,15 @@ async def api_init(payload: InitPayload):
             )
     if payload.mode == 'full':
         _settlement_date       = payload.settlement_date
-        _subscribed_count_full = len(payload.contracts)
+        _subscribed_count_full = len(target)   # 疊加後的總數
         _connected             = True
     else:
-        _subscribed_count_day  = len(payload.contracts)
+        _subscribed_count_day  = len(target)
     logger.info(
-        f"Bridge init [{payload.mode}]: {len(payload.contracts)} 個合約，"
-        f"結算日 {payload.settlement_date}"
+        f"Bridge init [{payload.mode}] {'merge' if payload.merge else 'replace'}: "
+        f"{len(payload.contracts)} 個合約（store 共 {len(target)} 個），結算日 {payload.settlement_date}"
     )
-    return {"ok": True, "count": len(payload.contracts)}
+    return {"ok": True, "count": len(target)}
 
 # ── Bridge 端點：/api/feed ────────────────────────────────────
 

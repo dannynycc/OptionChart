@@ -50,7 +50,7 @@ body {
 
 /* ── 左側：T字報價表 ── */
 #left-panel {
-  width: 900px;
+  width: 1060px;
   min-width: 200px;
   flex-shrink: 0;
   display: flex;
@@ -103,7 +103,7 @@ body {
 #strike-table-body {
   flex: 1;
   overflow-y: auto;
-  overflow-x: visible;
+  overflow-x: hidden;
   scrollbar-width: thin;
   scrollbar-color: #30363d transparent;
 }

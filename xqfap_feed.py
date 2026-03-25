@@ -1,24 +1,15 @@
 """
-xqfap_feed.py — 新富邦e01 DDE 橋接
-讀取 XQFAP DDE server 的 OutSize/InSize（外盤/內盤口數）+ TotalVolume + AvgPrice
+xqfap_feed.py — 新富邦e01 DDE 橋接 (v2.11)
+讀取 XQFAP DDE server 的 InOutRatio + TotalVolume + AvgPrice
 推送至 FastAPI server (main.py) /api/init + /api/feed
 
-【執行環境】Windows 原生 Python（需 pywin32：pip install pywin32）
-【必要條件】新富邦e01 軟體必須開著（它是 DDE server）
+【架構】
+  pywin32 DDE  → Name / TotalVolume / InOutRatio 探索與輪詢（無 item quota 限制）
+  DDEML ctypes → AvgPrice 專用（修正 pywin32 小數截斷 bug）
+
 【執行方式】
   python xqfap_feed.py              # 正常執行
   python xqfap_feed.py --discover   # 列出本月所有可用系列碼
-
-【config_xqfap.py 欄位】
-  XQ_SERIES       = "N03"           # 每週換倉時更新（N=W4, 03=March）
-  SETTLEMENT_DATE = "20260325"      # 結算日
-  SERVER_URL      = "http://localhost:8000"
-
-【DDE 實作說明】
-  直接使用 Windows DDEML API（user32.dll + ctypes），不用 pywin32 dde 模組。
-  原因：pywin32 dde 的 Request() 有 bug，讀取 CF_TEXT 回應時截斷小數位
-  （例如 '0.4' 只讀到 '0.'，'93.3' 只讀到 '93.'），導致 AvgPrice 精度遺失。
-  DDEML 直接呼叫用 DdeGetData 查大小後再分配緩衝，可正確讀取完整字串。
 """
 
 import sys
@@ -27,6 +18,9 @@ import ctypes
 import logging
 import threading
 import datetime
+
+import win32ui  # noqa: F401 — dde 依賴它
+import dde
 
 try:
     import requests
@@ -48,100 +42,119 @@ logger = logging.getLogger(__name__)
 
 # ── 設定 ──────────────────────────────────────────────────────
 
-XQ_SERIES       = cfg.XQ_SERIES        # e.g. "N03"
-SETTLEMENT_DATE = cfg.SETTLEMENT_DATE  # e.g. "20260326"
+XQ_SERIES       = cfg.XQ_SERIES
+SETTLEMENT_DATE = cfg.SETTLEMENT_DATE
 SERVER_URL      = getattr(cfg, 'SERVER_URL', 'http://localhost:8000')
 
-STRIKE_STEP     = 50
-MISS_LIMIT      = 10     # 連續找不到幾個就停止往該方向探索
+STRIKE_STEP = 50
+MISS_LIMIT  = 10  # 連續10筆miss（=500點空洞）即停；遠端OTM履約價間距可能>250點
 
 MODE = sys.argv[1] if len(sys.argv) > 1 else ''
 
-# ── DDEML API（user32.dll）宣告 ───────────────────────────────
+# ── pywin32 DDE（探索 + InOutRatio / TotalVolume）─────────────
+
+_srv  = None
+_conv = None
+
+
+def _connect_dde() -> bool:
+    global _srv, _conv
+    try:
+        _srv = dde.CreateServer()
+        _srv.Create("XQFAPFeed")
+        _conv = dde.CreateConversation(_srv)
+        _conv.ConnectTo("XQFAP", "Quote")
+        logger.info("XQFAP DDE 連線成功（pywin32）")
+        return True
+    except Exception as e:
+        logger.error(f"XQFAP DDE 連線失敗：{e}，請確認新富邦e01已開啟")
+        return False
+
+
+def _req(item: str) -> str:
+    """pywin32 DDE request；失敗或 '-' 回傳空字串"""
+    try:
+        val = _conv.Request(item)
+        if val is None:
+            return ''
+        val = str(val).strip()
+        return '' if val == '-' else val
+    except Exception:
+        return ''
+
+
+def _to_float(s: str) -> float:
+    try:
+        return float(str(s).strip())
+    except (ValueError, TypeError):
+        return 0.0
+
+
+# ── DDEML ctypes（僅用於 AvgPrice，修正小數截斷）─────────────
 
 _user32 = ctypes.WinDLL("user32")
 
 _PFNCALLBACK = ctypes.WINFUNCTYPE(
-    ctypes.c_void_p,   # return HDDEDATA
-    ctypes.c_uint,     # uType
-    ctypes.c_uint,     # uFmt
-    ctypes.c_void_p,   # hconv
-    ctypes.c_void_p,   # hsz1
-    ctypes.c_void_p,   # hsz2
-    ctypes.c_void_p,   # hdata
-    ctypes.c_size_t,   # dwData1
-    ctypes.c_size_t,   # dwData2
+    ctypes.c_void_p,
+    ctypes.c_uint, ctypes.c_uint, ctypes.c_void_p, ctypes.c_void_p,
+    ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t,
 )
 _DWORD = ctypes.c_ulong
 
-_CF_TEXT         = 1
-_XTYP_REQUEST    = 0x20B0
-_DDE_TIMEOUT_MS  = 5000
-_CP_WINUNICODE   = 1200
+_CF_TEXT          = 1
+_XTYP_REQUEST     = 0x20B0
+_DDE_TIMEOUT_MS   = 5000
+_CP_WINUNICODE    = 1200
 _APPCMD_CLIENTONLY = 0x0010
 
-# 讓 callback 不被 GC 回收
 def _null_cb(a, b, c, d, e, f, g, h):
-    return ctypes.cast(ctypes.c_void_p(0), ctypes.c_void_p)
-_dde_callback = _PFNCALLBACK(_null_cb)
-
-# ── DDE 連線狀態 ──────────────────────────────────────────────
-
-_dde_inst  = _DWORD(0)   # DWORD idInst
-_dde_hconv = None        # HCONV
+    return None
+_dde_callback  = _PFNCALLBACK(_null_cb)
+_ddeml_inst    = _DWORD(0)
+_ddeml_hconv   = None
 
 
-def _connect_dde() -> bool:
-    """建立 XQFAP DDEML 連線，成功回傳 True"""
-    global _dde_inst, _dde_hconv
+def _connect_ddeml() -> bool:
+    """建立 DDEML 連線（僅用於讀 AvgPrice）"""
+    global _ddeml_inst, _ddeml_hconv
     try:
-        # 初始化 DDEML
         ret = _user32.DdeInitializeW(
-            ctypes.byref(_dde_inst), _dde_callback, _APPCMD_CLIENTONLY, 0
+            ctypes.byref(_ddeml_inst), _dde_callback, _APPCMD_CLIENTONLY, 0
         )
         if ret != 0:
-            logger.error(f"DdeInitializeW 失敗，ret={ret}")
+            logger.warning(f"DDEML DdeInitializeW 失敗 ret={ret}，AvgPrice 將使用 pywin32 回退值")
             return False
-
-        # 建立 service / topic string handle
-        hsz_svc   = _user32.DdeCreateStringHandleW(_dde_inst.value, "XQFAP", _CP_WINUNICODE)
-        hsz_topic = _user32.DdeCreateStringHandleW(_dde_inst.value, "Quote", _CP_WINUNICODE)
-
-        # 連線
-        hconv = _user32.DdeConnect(_dde_inst.value, hsz_svc, hsz_topic, None)
-        _user32.DdeFreeStringHandle(_dde_inst.value, hsz_svc)
-        _user32.DdeFreeStringHandle(_dde_inst.value, hsz_topic)
-
+        hsz_svc   = _user32.DdeCreateStringHandleW(_ddeml_inst.value, "XQFAP", _CP_WINUNICODE)
+        hsz_topic = _user32.DdeCreateStringHandleW(_ddeml_inst.value, "Quote", _CP_WINUNICODE)
+        hconv = _user32.DdeConnect(_ddeml_inst.value, hsz_svc, hsz_topic, None)
+        _user32.DdeFreeStringHandle(_ddeml_inst.value, hsz_svc)
+        _user32.DdeFreeStringHandle(_ddeml_inst.value, hsz_topic)
         if not hconv:
-            err = _user32.DdeGetLastError(_dde_inst.value)
-            logger.error(f"DdeConnect 失敗，error={err}，請確認新富邦e01 軟體已開啟")
+            logger.warning("DDEML DdeConnect 失敗，AvgPrice 將使用 pywin32 回退值")
             return False
-
-        _dde_hconv = hconv
-        logger.info("XQFAP DDE 連線成功（DDEML）")
+        _ddeml_hconv = hconv
+        logger.info("DDEML 連線成功（AvgPrice 專用）")
         return True
     except Exception as e:
-        logger.error(f"XQFAP DDE 連線失敗：{e}")
+        logger.warning(f"DDEML 連線例外：{e}，AvgPrice 將使用 pywin32 回退值")
         return False
 
 
-def _request(item: str) -> str:
-    """
-    DDEML XTYP_REQUEST，失敗或回傳 '-' 均視為無效，回傳空字串。
-    使用 DdeGetData 先查大小再分配緩衝，正確保留小數位（修正 pywin32 截斷問題）。
-    """
+def _req_ddeml(item: str) -> str:
+    """DDEML request；失敗回傳空字串（上層 fallback 到 pywin32）"""
+    if not _ddeml_hconv:
+        return ''
     try:
-        hsz_item = _user32.DdeCreateStringHandleW(_dde_inst.value, item, _CP_WINUNICODE)
+        hsz_item = _user32.DdeCreateStringHandleW(_ddeml_inst.value, item, _CP_WINUNICODE)
         dr = _DWORD(0)
         hdata = _user32.DdeClientTransaction(
-            None, 0, _dde_hconv, hsz_item,
+            None, 0, _ddeml_hconv, hsz_item,
             _CF_TEXT, _XTYP_REQUEST, _DDE_TIMEOUT_MS, ctypes.byref(dr)
         )
-        _user32.DdeFreeStringHandle(_dde_inst.value, hsz_item)
+        _user32.DdeFreeStringHandle(_ddeml_inst.value, hsz_item)
         if not hdata:
             return ''
-        # 查大小 → 分配 → 讀資料
-        sz = _user32.DdeGetData(hdata, None, 0, 0)
+        sz  = _user32.DdeGetData(hdata, None, 0, 0)
         buf = ctypes.create_string_buffer(sz) if sz > 0 else ctypes.create_string_buffer(1)
         _user32.DdeGetData(hdata, buf, sz, 0)
         _user32.DdeFreeDataHandle(hdata)
@@ -151,34 +164,35 @@ def _request(item: str) -> str:
         return ''
 
 
-def _to_float(s: str) -> float:
-    try:
-        return float(s.rstrip('%'))
-    except (ValueError, TypeError, AttributeError):
-        return 0.0
+def _get_avg_price(symbol: str) -> float:
+    """先用 DDEML 讀 AvgPrice（正確小數），失敗才 fallback 到 pywin32"""
+    item = f"{symbol}.TF-AvgPrice"
+    val  = _req_ddeml(item)
+    if not val:
+        val = _req(item)   # pywin32 fallback（小數可能截斷，但優於 0）
+    return _to_float(val)
 
 
 # ── 合約資料讀取 ───────────────────────────────────────────────
 
 def _get_fields(symbol: str) -> "dict | None":
     """
-    讀取單一合約的所有欄位。
-    Name 無效 → 此合約不存在 → 回傳 None。
-    InOutRatio = OutSize/TotalVolume×100（XQFAP 定義，含開盤競價），是主要欄位。
+    Name 無效 → 合約不存在 → 回傳 None。
+    InOutRatio = OutSize/TotalVolume×100（含開盤競價）。
+    AvgPrice 優先 DDEML（正確小數），失敗 fallback pywin32。
     """
-    name = _request(f"{symbol}.TF-Name")
+    name = _req(f"{symbol}.TF-Name")
     if not name:
         return None
     return {
-        'total_volume': _to_float(_request(f"{symbol}.TF-TotalVolume")),
-        'inout_ratio':  _to_float(_request(f"{symbol}.TF-InOutRatio")),
-        'avg_price':    _to_float(_request(f"{symbol}.TF-AvgPrice")),
+        'total_volume': _to_float(_req(f"{symbol}.TF-TotalVolume")),
+        'inout_ratio':  _to_float(_req(f"{symbol}.TF-InOutRatio")),
+        'avg_price':    _get_avg_price(symbol),
     }
 
 
 def _get_center_price() -> int:
-    """從 FITX00 取得台指期近月現價，作為履約價搜尋中心"""
-    val = _request("FITX00.TF-Price")
+    val   = _req("FITX00.TF-Price")
     price = _to_float(val)
     if price > 0:
         center = int(round(price / STRIKE_STEP) * STRIKE_STEP)
@@ -188,62 +202,59 @@ def _get_center_price() -> int:
     return 32000
 
 
-# ── 合約探索 ──────────────────────────────────────────────────
+# ── 合約探索（v2.7 架構：先 UP 再 DN）────────────────────────
 
 def _discover_contracts(center: int) -> "tuple[list, dict]":
     """
-    從 center 向上/向下探索，Call + Put 各自連續 MISS_LIMIT 個找不到就停。
-    不寫死範圍，自動適應任何指數位置。
-    回傳 (contracts_for_init, meta_map)
+    pywin32 DDE 探索：先從 center 往上，再從 center-50 往下。
+    pywin32 無 item quota 限制，可探索完整 27300～37800 範圍。
     """
     series = XQ_SERIES
-    logger.info(f"探索合約：TX4{series} 系列，從 {center} 向兩側展開（連續{MISS_LIMIT}個miss即停）")
+    logger.info(
+        f"探索合約：TX4{series} 系列，從 {center} 向兩側展開"
+        f"（連續{MISS_LIMIT}個miss即停）"
+    )
 
-    found: dict[int, dict[str, bool]] = {}  # strike -> {'C': bool, 'P': bool}
+    found: dict[int, dict[str, bool]] = {}
 
     def _probe_direction(start: int, step: int):
-        """step=+50 往上，step=-50 往下"""
-        miss = 0
+        miss   = 0
         strike = start
         while miss < MISS_LIMIT:
             hit = False
-            for side_letter in ('C', 'P'):
-                symbol = f"TX4{series}{side_letter}{strike}"
-                name   = _request(f"{symbol}.TF-Name")
+            for side in ('C', 'P'):
+                symbol = f"TX4{series}{side}{strike}"
+                name   = _req(f"{symbol}.TF-Name")
                 if name:
-                    if strike not in found:
-                        found[strike] = {}
-                    found[strike][side_letter] = True
+                    found.setdefault(strike, {})[side] = True
                     hit = True
             miss = 0 if hit else miss + 1
             strike += step
 
-    _probe_direction(center, +STRIKE_STEP)
-    _probe_direction(center - STRIKE_STEP, -STRIKE_STEP)  # 往下不重複 center
+    _probe_direction(center,              +STRIKE_STEP)   # UP
+    _probe_direction(center - STRIKE_STEP, -STRIKE_STEP)  # DN（不重複 center）
 
-    contracts = []
-    meta      = {}
-    found_c   = 0
-    found_p   = 0
-
+    contracts, meta = [], {}
+    found_c = found_p = 0
     for strike in sorted(found.keys()):
-        for side_letter, side_code in (('C', 'C'), ('P', 'P')):
-            if not found[strike].get(side_letter):
+        for side in ('C', 'P'):
+            if not found[strike].get(side):
                 continue
-            symbol = f"TX4{series}{side_letter}{strike}"
-            contracts.append({
-                'symbol':     symbol,
-                'strike':     strike,
-                'side':       side_code,
-                'prev_close': 0.0,
-            })
-            meta[symbol] = {'strike': strike, 'side': side_code}
-            if side_code == 'C':
+            symbol = f"TX4{series}{side}{strike}"
+            contracts.append({'symbol': symbol, 'strike': strike,
+                               'side': side, 'prev_close': 0.0})
+            meta[symbol] = {'strike': strike, 'side': side}
+            if side == 'C':
                 found_c += 1
             else:
                 found_p += 1
 
-    logger.info(f"探索完成：Call {found_c} 個，Put {found_p} 個，共 {len(contracts)} 個合約")
+    if found:
+        strikes = sorted(found.keys())
+        logger.info(
+            f"探索完成：Call {found_c} 個，Put {found_p} 個，共 {len(contracts)} 個合約"
+            f"（{strikes[0]}～{strikes[-1]}）"
+        )
     return contracts, meta
 
 
@@ -296,13 +307,10 @@ _meta_day:  dict = {}
 _prev_full: dict = {}
 _prev_day:  dict = {}
 
-# 背景 thread 設旗，主 thread (_poll_loop) 偵測後在主 thread 做 reinit
-# （DDE 有 thread affinity，只能在建立 _dde_hconv 的 thread 上 Request）
 _reinit_flag = threading.Event()
 
 
 def _poll_meta(meta: dict, prev: dict) -> list:
-    """輪詢 meta 中所有合約，回傳有變動的批次；途中若旗標被設則提前中斷"""
     batch = []
     for symbol in list(meta.keys()):
         if _reinit_flag.is_set():
@@ -332,8 +340,8 @@ def _poll_meta(meta: dict, prev: dict) -> list:
 
 
 def _poll_loop():
-    """永遠同時維護 full + day 兩組資料；full 每輪輪詢，day 每 3 輪輪詢一次"""
-    tick = 0
+    """永遠同時維護 full + day；full 每輪，day 每 3 輪"""
+    tick     = 0
     day_tick = 0
     while True:
         _reinit_flag.wait(timeout=1.0)
@@ -349,12 +357,10 @@ def _poll_loop():
             day_tick = 0
             continue
 
-        # 永遠輪詢 full
         batch_full = _poll_meta(_meta_full, _prev_full)
         if batch_full:
             _post_feed(batch_full, mode="full")
 
-        # day 每 3 輪輪詢一次（節省 DDE 資源，inactive 時略為落後可接受）
         day_tick += 1
         if day_tick % 3 == 0 and not _reinit_flag.is_set():
             batch_day = _poll_meta(_meta_day, _prev_day)
@@ -369,12 +375,11 @@ _last_reinit_key = ""
 
 
 def _build_day_meta(meta_full: dict) -> "tuple[list, dict]":
-    """從 full meta 快速推導 day meta（TX4N03→TX403），不需重新 DDE explore"""
-    full_prefix = f"TX4{XQ_SERIES}"          # e.g. "TX4N03"
-    day_prefix  = f"TX4{XQ_SERIES[1:]}"      # e.g. "TX403"
+    full_prefix = f"TX4{XQ_SERIES}"
+    day_prefix  = f"TX4{XQ_SERIES[1:]}"
     contracts, meta = [], {}
     for old_sym, info in meta_full.items():
-        suffix = old_sym[len(full_prefix):]   # e.g. "C32600"
+        suffix = old_sym[len(full_prefix):]
         sym = f"{day_prefix}{suffix}"
         contracts.append({'symbol': sym, 'strike': info['strike'],
                            'side': info['side'], 'prev_close': 0.0})
@@ -417,16 +422,14 @@ def _auto_reinit_scheduler():
 # ── --discover 模式 ───────────────────────────────────────────
 
 def _do_discover():
-    """列出本月所有可用系列碼，幫助換週後找對的 XQ_SERIES"""
     month = datetime.datetime.now().strftime('%m')
-    logger.info(f"搜尋本月 ({month}) 所有可用系列碼（以 TX4 + ? + {month} 格式探索）...")
+    logger.info(f"搜尋本月 ({month}) 所有可用系列碼...")
     found_any = False
     for letter in 'ABCDEFGHIJKLMNOPQRSTUVWXYZ':
         series = f"{letter}{month}"
-        # 用 32000 測試，不管 strike 是否存在，只要 Name 有值就代表系列有效
         for test_strike in (32000, 32500, 33000, 31500):
-            sym = f"TX4{series}C{test_strike}"
-            name = _request(f"{sym}.TF-Name")
+            sym  = f"TX4{series}C{test_strike}"
+            name = _req(f"{sym}.TF-Name")
             if name:
                 logger.info(f"  [OK] 系列碼 {series!r}  (樣本: {sym} = {name})")
                 found_any = True
@@ -443,11 +446,13 @@ def main():
     if not _connect_dde():
         sys.exit(1)
 
+    # DDEML 連線（AvgPrice 專用，失敗不影響主流程）
+    _connect_ddeml()
+
     if MODE == '--discover':
         _do_discover()
         return
 
-    # 探索 full 系列合約
     center = _get_center_price()
     contracts_full, _meta_full = _discover_contracts(center)
 
@@ -458,22 +463,19 @@ def main():
         )
         sys.exit(1)
 
-    # Day 系列由 full 推導，不需重新 DDE 探索
     contracts_day, _meta_day = _build_day_meta(_meta_full)
 
-    # 推送兩個 init
     _post_init(contracts_full, mode="full")
     _post_init(contracts_day,  mode="day")
-
-    # 推送兩個初始快照
     _push_snapshot(_meta_full, "full")
     _push_snapshot(_meta_day,  "day")
 
-    # 啟動自動重新初始化排程
     threading.Thread(target=_auto_reinit_scheduler, daemon=True).start()
 
-    # 啟動主輪詢迴圈（阻塞）
-    logger.info(f"開始輪詢 full={len(_meta_full)} + day={len(_meta_day)} 合約（TX4{XQ_SERIES} / TX4{XQ_SERIES[1:]}）...")
+    logger.info(
+        f"開始輪詢 full={len(_meta_full)} + day={len(_meta_day)} 合約"
+        f"（TX4{XQ_SERIES} / TX4{XQ_SERIES[1:]}）..."
+    )
     _poll_loop()
 
 
