@@ -306,7 +306,7 @@ function updateTable(rows) {
     row.appendChild(_cell('col-call-sell',  bc > 0 ? String(bc) : '',                     ch(bc,  'bc')   ? ' flash' : ''));
     row.appendChild(_cell('col-call-buy',   ac > 0 ? String(ac) : '',                     ch(ac,  'ac')   ? ' flash' : ''));
     row.appendChild(_cell('col-call-vol',   vc > 0 ? String(vc) : '',                     ch(vc,  'vc')   ? ' flash' : ''));
-    row.appendChild(_cell('col-call-ratio', vc > 0 ? rc_.toFixed(1) : '',                 ch(rc_, 'rc_')  ? ' flash' : ''));
+    row.appendChild(_cell('col-call-ratio', vc > 0 ? rc_.toFixed(2) : '',                 ch(rc_, 'rc_')  ? ' flash' : ''));
     row.appendChild(_cell('col-call-avg',   r.avg_price_call > 0 ? r.avg_price_call.toFixed(1) : '', ch(r.avg_price_call, 'avg_c') ? ' flash' : ''));
     row.appendChild(_cell('col-call-val' + ncCls, nc !== 0 ? nc.toFixed(0) : '',          ch(nc,  'nc')   ? ' flash' : ''));
     row.appendChild(_barCell('col-call-bar', 'bar-call ' + (nc >= 0 ? 'positive' : 'negative'), callPct));
@@ -318,7 +318,7 @@ function updateTable(rows) {
     row.appendChild(_cell('col-put-sell',   bp > 0 ? String(bp) : '',                     ch(bp,  'bp')   ? ' flash' : ''));
     row.appendChild(_cell('col-put-buy',    ap > 0 ? String(ap) : '',                     ch(ap,  'ap')   ? ' flash' : ''));
     row.appendChild(_cell('col-put-vol',    vp > 0 ? String(vp) : '',                     ch(vp,  'vp')   ? ' flash' : ''));
-    row.appendChild(_cell('col-put-ratio',  vp > 0 ? rp_.toFixed(1) : '',                 ch(rp_, 'rp_')  ? ' flash' : ''));
+    row.appendChild(_cell('col-put-ratio',  vp > 0 ? rp_.toFixed(2) : '',                 ch(rp_, 'rp_')  ? ' flash' : ''));
     row.appendChild(_cell('col-put-avg',    r.avg_price_put > 0 ? r.avg_price_put.toFixed(1) : '',  ch(r.avg_price_put, 'avg_p') ? ' flash' : ''));
     row.appendChild(_cell('col-pnl-call',     r.pnl_call     != null ? r.pnl_call.toFixed(4)     : '', ''));
     row.appendChild(_cell('col-pnl-put',      r.pnl_put      != null ? r.pnl_put.toFixed(4)      : '', ''));
