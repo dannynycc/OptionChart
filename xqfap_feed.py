@@ -658,6 +658,152 @@ def _do_discover():
         logger.info(f"  {series}  ({label})  結算日 {sd}")
 
 
+# ── --test-ddeml 模式（多執行緒 DDEML 可行性測試，不影響正式流程）──────
+
+_user32.DdeUninitialize.argtypes = [ctypes.c_ulong]
+
+
+def _ddeml_worker(worker_id: int, symbols: list, fields: list,
+                  results: dict, errors: dict):
+    """
+    在獨立 thread 中建立全新的 DDEML 連線，讀取 symbols × fields，
+    將讀到的值存入 results[worker_id]，失敗訊息存入 errors[worker_id]。
+    """
+    inst  = _DWORD(0)
+    hconv = None
+    cb    = _PFNCALLBACK(_null_cb)   # per-thread callback（避免跨 thread 共用）
+    try:
+        ret = _user32.DdeInitializeW(ctypes.byref(inst), cb, _APPCMD_CLIENTONLY, 0)
+        if ret != 0:
+            errors[worker_id] = f"DdeInitializeW 失敗 ret={ret}"
+            return
+
+        hsz_svc   = _user32.DdeCreateStringHandleW(inst.value, "XQFAP", _CP_WINUNICODE)
+        hsz_topic = _user32.DdeCreateStringHandleW(inst.value, "Quote",  _CP_WINUNICODE)
+        hconv     = _user32.DdeConnect(inst.value, hsz_svc, hsz_topic, None)
+        _user32.DdeFreeStringHandle(inst.value, hsz_svc)
+        _user32.DdeFreeStringHandle(inst.value, hsz_topic)
+        if not hconv:
+            errors[worker_id] = "DdeConnect 失敗（XQFAP 可能拒絕多連線）"
+            _user32.DdeUninitialize(inst.value)
+            return
+
+        ok, fail = 0, 0
+        sample   = {}
+        for sym in symbols:
+            for fld in fields:
+                item     = f"{sym}.{fld}"
+                hsz_item = _user32.DdeCreateStringHandleW(inst.value, item, _CP_WINUNICODE)
+                dr       = _DWORD(0)
+                hdata    = _user32.DdeClientTransaction(
+                    None, 0, hconv, hsz_item,
+                    _CF_TEXT, _XTYP_REQUEST, _DDE_TIMEOUT_MS, ctypes.byref(dr)
+                )
+                _user32.DdeFreeStringHandle(inst.value, hsz_item)
+                if hdata:
+                    sz  = _user32.DdeGetData(hdata, None, 0, 0)
+                    buf = ctypes.create_string_buffer(sz) if sz > 0 else ctypes.create_string_buffer(1)
+                    _user32.DdeGetData(hdata, buf, sz, 0)
+                    _user32.DdeFreeDataHandle(hdata)
+                    val = buf.raw.rstrip(b'\x00').decode('cp950', errors='replace').strip()
+                    if val and val != '-':
+                        ok += 1
+                        if len(sample) < 2:
+                            sample[item] = val
+                    else:
+                        fail += 1
+                else:
+                    fail += 1
+
+        results[worker_id] = {'ok': ok, 'fail': fail, 'sample': sample}
+
+    except Exception as e:
+        errors[worker_id] = str(e)
+    finally:
+        if hconv:
+            pass   # DdeDisconnect 可選，process 結束時自動清理
+        try:
+            _user32.DdeUninitialize(inst.value)
+        except Exception:
+            pass
+
+
+def _do_test_ddeml():
+    """
+    --test-ddeml：測試 XQFAP 是否支援多條並行 DDEML 連線。
+    使用 pywin32 找一個有效系列，在 N threads 各自建 DDEML 連線並平行讀取。
+    結果印至 log，不影響正式輪詢程式。
+    """
+    NUM_WORKERS = 4
+    FIELDS      = ['TF-TotalVolume', 'TF-InOutRatio']
+
+    center = _get_center_price()
+    if not center:
+        logger.error("無法取得中心價，請確認新富邦e01已開啟")
+        return
+
+    # 找一個有效系列
+    valid = _scan_valid_series(center)
+    if not valid:
+        logger.error("找不到有效系列")
+        return
+    series = valid[0]
+    logger.info(f"測試使用系列：{series}，中心價 {center}")
+
+    # 建立測試 symbols（center ±3 strikes × C/P = 12 個）
+    strikes = [center + i * STRIKE_STEP for i in range(-3, 3)]
+    symbols = [f"{series}{side}{s}" for s in strikes for side in ('C', 'P')]
+    logger.info(f"測試 symbols：{len(symbols)} 個（{symbols[0]} … {symbols[-1]}）")
+
+    # 平均分配給 NUM_WORKERS 個 thread
+    chunks  = [symbols[i::NUM_WORKERS] for i in range(NUM_WORKERS)]
+    results, errors = {}, {}
+    threads = []
+    t0 = time.time()
+
+    for wid, chunk in enumerate(chunks):
+        t = threading.Thread(
+            target=_ddeml_worker,
+            args=(wid, chunk, FIELDS, results, errors),
+            daemon=True,
+        )
+        threads.append(t)
+
+    logger.info(f"啟動 {NUM_WORKERS} 個 DDEML worker threads...")
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=15)
+
+    elapsed = time.time() - t0
+    logger.info(f"全部完成，耗時 {elapsed:.2f}s")
+    logger.info("─" * 60)
+
+    total_ok, total_fail = 0, 0
+    for wid in range(NUM_WORKERS):
+        if wid in errors:
+            logger.warning(f"  Worker-{wid}: [FAIL] {errors[wid]}")
+        elif wid in results:
+            r = results[wid]
+            total_ok   += r['ok']
+            total_fail += r['fail']
+            logger.info(
+                f"  Worker-{wid}: [OK] ok={r['ok']} fail={r['fail']} "
+                f"樣本={r['sample']}"
+            )
+        else:
+            logger.warning(f"  Worker-{wid}: [TIMEOUT] 未在 15s 內完成")
+
+    logger.info("─" * 60)
+    if errors:
+        logger.warning(f"結論：{len(errors)} 個 worker 失敗 → 多執行緒 DDEML 不可行")
+    else:
+        logger.info(
+            f"結論：{NUM_WORKERS} 條 DDEML 連線全數成功，"
+            f"ok={total_ok} fail={total_fail}，多執行緒可行！"
+        )
+
+
 # ── 主程式 ────────────────────────────────────────────────────
 
 def main():
@@ -670,6 +816,10 @@ def main():
 
     if MODE == '--discover':
         _do_discover()
+        return
+
+    if MODE == '--test-ddeml':
+        _do_test_ddeml()
         return
 
     center = _get_center_price()
