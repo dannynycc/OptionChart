@@ -503,8 +503,9 @@ def _do_discover():
         prefix = series[:n_idx]
         month  = int(series[n_idx + 1:])
         year   = now.year if month >= now.month else now.year + 1
-        sd = tc.settlement_date(prefix, year, month)
-        logger.info(f"  {series}  結算日 {sd}")
+        sd    = tc.settlement_date(prefix, year, month)
+        label = tc.tf_name_label(prefix, month)
+        logger.info(f"  {series}  ({label})  結算日 {sd}")
 
 
 # ── 主程式 ────────────────────────────────────────────────────

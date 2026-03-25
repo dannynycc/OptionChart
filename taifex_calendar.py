@@ -127,6 +127,25 @@ def series_day(prefix: str, month: int) -> str:
     return f"{prefix}{month:02d}"
 
 
+def tf_name_label(prefix: str, month: int) -> str:
+    """
+    回傳 XQFAP TF-Name 欄位的系列標籤。
+      週三（非月選）→ '{MM}W{n}'  e.g. '03W4'
+      週五          → '{MM}F{n}'  e.g. '03F4'
+      月選 TXO      → '{MM}'      e.g. '04'
+    """
+    rule = next(((n, wd) for p, n, wd in PREFIX_RULES if p == prefix), None)
+    if rule is None:
+        return f"{month:02d}"
+    n, wd = rule
+    if prefix == "TXO":
+        return f"{month:02d}"
+    elif wd == 2:
+        return f"{month:02d}W{n}"
+    else:
+        return f"{month:02d}F{n}"
+
+
 def day_from_full(full_series: str) -> str:
     """全日盤 → 日盤，e.g. 'TX4N03' → 'TX403'（去掉 N）"""
     # 找 N 的位置（固定在前綴後面）
