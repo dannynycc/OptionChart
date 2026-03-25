@@ -72,10 +72,13 @@ def nth_weekday(year: int, month: int, n: int, weekday: int) -> datetime.date | 
 def fetch_holidays(year: int) -> set[datetime.date]:
     """從 TWSE 取得指定年度所有休市日。結果 LRU 快取，不重複 fetch。"""
     try:
-        import urllib.request
+        import urllib.request, ssl
         url = (f"https://www.twse.com.tw/rwd/zh/holidaySchedule/"
                f"holidaySchedule?response=html&year={year}")
-        with urllib.request.urlopen(url, timeout=5) as r:
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        with urllib.request.urlopen(url, timeout=5, context=ctx) as r:
             html = r.read().decode("utf-8", errors="replace")
         holidays = set()
         for m in re.finditer(r'(\d{4})[/-](\d{2})[/-](\d{2})', html):

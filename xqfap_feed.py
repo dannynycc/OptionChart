@@ -436,21 +436,75 @@ def _auto_reinit_scheduler():
 
 # ── --discover 模式 ───────────────────────────────────────────
 
+# TAIFEX 前綴清單（按到期順序）
+# 週三：TX1=W1, TX2=W2, TXO=W3(月選), TX4=W4, TX5=W5(罕見)
+# 週五：TXU=W1, TXV=W2, TXX=W3, TXY=W4, TXZ=W5(罕見)
+_ALL_PREFIXES   = ['TX1','TX2','TXO','TX4','TX5','TXU','TXV','TXX','TXY','TXZ']
+_WEEKLY_PREFIXES = [p for p in _ALL_PREFIXES if p != 'TXO']  # 週選（2個月後不存在）
+
+
+def _scan_valid_series(center: int) -> list[str]:
+    """
+    掃描 XQFAP 中所有有效系列。
+    - 當月 + 下個月：10 個前綴全掃
+    - 第3個月 ～ 第12個月：只掃 TXO（月選）
+    共 120 組測試，約 0.5 秒。
+    回傳有效系列碼清單，如 ['TX4N03','TXYN03','TX1N04',...]
+    """
+    now   = datetime.datetime.now()
+    found = []
+
+    # 測試點：center, +50, +100, +150（其中一個必中）
+    test_strikes = [center, center + 50, center + 100, center + 150]
+
+    for month_offset in range(12):
+        dt     = now + datetime.timedelta(days=month_offset * 31)
+        month  = dt.strftime('%m')
+        # 第3個月（offset>=2）以後只掃月選
+        prefixes = _ALL_PREFIXES if month_offset < 2 else ['TXO']
+
+        for prefix in prefixes:
+            series = f"{prefix}N{month}"
+            for strike in test_strikes:
+                sym  = f"{series}C{strike}"
+                name = _req(f"{sym}.TF-Name")
+                if name:
+                    found.append(series)
+                    logger.info(f"  [OK] {series}  (樣本: {sym} = {name})")
+                    break  # 這個系列確認有效，不需再測更多點
+
+    return found
+
+
 def _do_discover():
-    month = datetime.datetime.now().strftime('%m')
-    logger.info(f"搜尋本月 ({month}) 所有可用系列碼...")
-    found_any = False
-    for letter in 'ABCDEFGHIJKLMNOPQRSTUVWXYZ':
-        series = f"{letter}{month}"
-        for test_strike in (32000, 32500, 33000, 31500):
-            sym  = f"TX4{series}C{test_strike}"
-            name = _req(f"{sym}.TF-Name")
-            if name:
-                logger.info(f"  [OK] 系列碼 {series!r}  (樣本: {sym} = {name})")
-                found_any = True
-                break
-    if not found_any:
-        logger.info("  未找到任何有效系列碼（請確認新富邦e01已開啟且合約已加載）")
+    import taifex_calendar as tc
+    center = _get_center_price()
+    logger.info(f"掃描所有有效系列（中心點 {center}，120 組測試）...")
+    found = _scan_valid_series(center)
+    if not found:
+        logger.info("未找到任何有效系列（請確認新富邦e01已開啟）")
+        return
+
+    # 依結算日排序
+    now = datetime.datetime.now()
+    def _sort_key(series: str):
+        # series 格式：{PREFIX}N{MM}，例如 TX4N03
+        n_idx  = series.index('N')
+        prefix = series[:n_idx]          # e.g. "TX4"
+        month  = int(series[n_idx + 1:]) # e.g. 3
+        year   = now.year if month >= now.month else now.year + 1
+        sd = tc.settlement_date(prefix, year, month)
+        return sd if sd else datetime.date(9999, 1, 1)
+
+    found.sort(key=_sort_key)
+    logger.info(f"找到 {len(found)} 個有效系列（依到期日排序）：")
+    for series in found:
+        n_idx  = series.index('N')
+        prefix = series[:n_idx]
+        month  = int(series[n_idx + 1:])
+        year   = now.year if month >= now.month else now.year + 1
+        sd = tc.settlement_date(prefix, year, month)
+        logger.info(f"  {series}  結算日 {sd}")
 
 
 # ── 主程式 ────────────────────────────────────────────────────
