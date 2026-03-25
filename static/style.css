@@ -35,6 +35,7 @@ body {
   border: 1px solid #30363d; border-radius: 4px;
   padding: 2px 4px; font-size: 13px; cursor: pointer;
 }
+#contract-select option { font-weight: 700; }
 
 /* ── 主體左右分割 ── */
 #main-body {

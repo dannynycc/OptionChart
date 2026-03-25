@@ -436,7 +436,11 @@ function handleData(data, source) {
   dataSource = source || 'WS';
   const modeChanged = data.session_mode !== _currentSessionMode;
   _currentSessionMode = data.session_mode;
-  if (modeChanged) _updateSeriesCode();
+  if (modeChanged) {
+    btnFull.classList.toggle('active', data.session_mode === 'full');
+    btnDay.classList.toggle('active',  data.session_mode === 'day');
+    _updateSeriesCode();
+  }
   updateTable(data.table);
   updateChart(data.pnl, modeChanged);
   updateStatus(data.status, data.settlement);
