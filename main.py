@@ -24,13 +24,17 @@ logger = logging.getLogger(__name__)
 
 # ── 全域資料 store ────────────────────────────────────────────
 
-store: dict[str, OptionData] = {}
+store_full: dict[str, OptionData] = {}
+store_day:  dict[str, OptionData] = {}
 _lock = threading.Lock()
 
-_settlement_date: str  = ""
-_subscribed_count: int = 0
-_last_updated: float   = 0.0
-_connected: bool       = False
+_settlement_date:        str   = ""
+_subscribed_count_full:  int   = 0
+_subscribed_count_day:   int   = 0
+_last_updated_full:      float = 0.0
+_last_updated_day:       float = 0.0
+_connected:              bool  = False
+_session_mode:           str   = "full"   # "full" = 全日盤(TX4N03)，"day" = 日盤(TX403)
 
 # 已連線的瀏覽器 WebSocket
 clients: set[WebSocket] = set()
@@ -38,23 +42,27 @@ clients: set[WebSocket] = set()
 # ── 計算 payload ──────────────────────────────────────────────
 
 def compute_payload() -> dict:
+    active = store_full if _session_mode == 'full' else store_day
     with _lock:
-        calls = [v for v in store.values() if v.side == 'C']
-        puts  = [v for v in store.values() if v.side == 'P']
-    pnl_result = calc_combined_pnl(calls, puts)
-    table      = build_strike_table(calls, puts)
+        calls = [v for v in active.values() if v.side == 'C']
+        puts  = [v for v in active.values() if v.side == 'P']
+    pnl_result   = calc_combined_pnl(calls, puts)
+    table        = build_strike_table(calls, puts)
+    last_updated      = _last_updated_full      if _session_mode == 'full' else _last_updated_day
+    subscribed_count  = _subscribed_count_full  if _session_mode == 'full' else _subscribed_count_day
     return {
         "table":      table,
         "pnl":        pnl_result,
         "settlement": _settlement_date,
         "status": {
             "connected":        _connected,
-            "subscribed_count": _subscribed_count,
+            "subscribed_count": subscribed_count,
             "settlement_date":  _settlement_date,
-            "last_updated":     _last_updated,
+            "last_updated":     last_updated,
             "error":            None,
         },
         "ts": time.time(),
+        "session_mode": _session_mode,
     }
 
 # ── 廣播 ─────────────────────────────────────────────────────
@@ -84,7 +92,7 @@ async def _periodic_broadcast():
         tick += 1
         if tick % 30 == 0:
             logger.info(f"periodic_broadcast heartbeat: clients={len(clients)}, store={len(store)}")
-        if clients and store:   # 有客戶端且有資料才廣播
+        if clients and (store_full or store_day):   # 有客戶端且有資料才廣播
             try:
                 await broadcast(compute_payload())
             except Exception as e:
@@ -113,25 +121,30 @@ class ContractMeta(BaseModel):
 class InitPayload(BaseModel):
     settlement_date: str
     contracts: list[ContractMeta]
+    mode: str = "full"   # "full" | "day"
 
 @app.post("/api/init")
 async def api_init(payload: InitPayload):
-    """Windows bridge 啟動時推送合約清單"""
-    global _settlement_date, _subscribed_count, _connected
+    """Windows bridge 啟動時推送合約清單（full / day 各一次）"""
+    global _settlement_date, _subscribed_count_full, _subscribed_count_day, _connected
+    target = store_full if payload.mode == 'full' else store_day
     with _lock:
-        store.clear()
+        target.clear()
         for c in payload.contracts:
-            store[c.symbol] = OptionData(
+            target[c.symbol] = OptionData(
                 symbol     = c.symbol,
                 strike     = c.strike,
                 side       = c.side,
                 prev_close = c.prev_close,
             )
-    _settlement_date  = payload.settlement_date
-    _subscribed_count = len(payload.contracts)
-    _connected        = True
+    if payload.mode == 'full':
+        _settlement_date       = payload.settlement_date
+        _subscribed_count_full = len(payload.contracts)
+        _connected             = True
+    else:
+        _subscribed_count_day  = len(payload.contracts)
     logger.info(
-        f"Bridge init: {len(payload.contracts)} 個合約，"
+        f"Bridge init [{payload.mode}]: {len(payload.contracts)} 個合約，"
         f"結算日 {payload.settlement_date}"
     )
     return {"ok": True, "count": len(payload.contracts)}
@@ -149,29 +162,27 @@ class FeedItem(BaseModel):
     trade_volume_day: int = -1
 
 @app.post("/api/feed")
-async def api_feed(updates: list[FeedItem]):
+async def api_feed(updates: list[FeedItem], mode: str = "full"):
     """Windows bridge 批次推送報價更新；自動廣播給瀏覽器"""
-    global _last_updated
+    global _last_updated_full, _last_updated_day
+    target = store_full if mode == 'full' else store_day
     found = 0
     value_changed = 0
     with _lock:
         for u in updates:
-            if u.symbol not in store:
+            if u.symbol not in target:
                 continue
             found += 1
-            opt = store[u.symbol]
-            # 只有值真正改變才算 value_changed，避免 SKCOM 送重複資料誤觸 last_updated
-            # 同時防止夜盤 zero-value callback 蓋掉日盤累計值
+            opt = target[u.symbol]
             old_bid, old_ask, old_vol = opt.bid_match, opt.ask_match, opt.trade_volume
-            new_bid = u.bid_match  if u.bid_match  > 0 else opt.bid_match
-            new_ask = u.ask_match  if u.ask_match  > 0 else opt.ask_match
+            new_bid = u.bid_match    if u.bid_match    > 0 else opt.bid_match
+            new_ask = u.ask_match    if u.ask_match    > 0 else opt.ask_match
             new_vol = u.trade_volume if u.trade_volume > 0 else opt.trade_volume
             if new_bid != old_bid or new_ask != old_ask or new_vol != old_vol:
                 opt.bid_match    = new_bid
                 opt.ask_match    = new_ask
                 opt.trade_volume = new_vol
                 value_changed += 1
-            # 純日盤欄位（富邦橋接才有，-1 = 未提供）
             if u.bid_match_day >= 0:
                 opt.bid_match_day    = u.bid_match_day
                 opt.ask_match_day    = u.ask_match_day
@@ -179,12 +190,38 @@ async def api_feed(updates: list[FeedItem]):
             if u.avg_price > 0:
                 opt.avg_price = u.avg_price
     logger.info(
-        f"api_feed: 收到 {len(updates)} 筆，found={found}，值變動={value_changed}，WS clients={len(clients)}"
+        f"api_feed [{mode}]: 收到 {len(updates)} 筆，found={found}，值變動={value_changed}，WS clients={len(clients)}"
     )
     if value_changed:
-        _last_updated = time.time()
-        await broadcast(compute_payload())
+        if mode == 'full':
+            _last_updated_full = time.time()
+        else:
+            _last_updated_day  = time.time()
+        # 只有 active 模式更新才廣播（inactive 更新靜默儲存）
+        if mode == _session_mode:
+            await broadcast(compute_payload())
     return {"ok": True, "updated": value_changed}
+
+# ── Session 模式端點 ──────────────────────────────────────────
+
+class SessionModePayload(BaseModel):
+    mode: str  # "full" | "day"
+
+@app.post("/api/set-session")
+async def api_set_session(payload: SessionModePayload):
+    global _session_mode
+    if payload.mode not in ("full", "day"):
+        return {"ok": False, "error": "invalid mode"}
+    _session_mode = payload.mode
+    logger.info(f"session mode → {payload.mode}")
+    # 立即廣播切換後的資料，無需等下一輪定時廣播
+    if clients:
+        await broadcast(compute_payload())
+    return {"ok": True}
+
+@app.get("/api/get-session")
+async def api_get_session():
+    return {"mode": _session_mode}
 
 # ── 一般 HTTP 端點 ────────────────────────────────────────────
 
@@ -200,9 +237,9 @@ async def get_data():
 async def get_status():
     return {
         "connected":        _connected,
-        "subscribed_count": _subscribed_count,
+        "subscribed_count": _subscribed_count_full if _session_mode == 'full' else _subscribed_count_day,
         "settlement_date":  _settlement_date,
-        "last_updated":     _last_updated,
+        "last_updated":     _last_updated_full if _session_mode == 'full' else _last_updated_day,
         "error":            None,
     }
 

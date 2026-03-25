@@ -1,5 +1,24 @@
 # Changelog
 
+## v2.6 (2026-03-25)
+
+### 雙 Store 即時切換（全日盤 ↔ 日盤）
+
+- **核心架構升級**：`main.py` 同時維護 `store_full`（TX4N03）和 `store_day`（TX403）兩張獨立 store
+- **切換瞬間完成**：按下切換按鈕 → POST `/api/set-session` → main.py 立即廣播另一 store 的資料，不再觸發 reinit
+  - 切換延遲從原本 8~14 秒降至 **<100ms**
+- **`xqfap_feed.py` 雙線輪詢**：
+  - 移除 `_poll_session_mode` 背景 thread（舊架構的 busy-poll 反模式）
+  - 啟動時從 full 合約自動推導 day 合約（`_build_day_meta`），不需重新 DDE 探索
+  - full 系列每輪輪詢；day 系列每 3 輪輪詢一次（節省 DDE 資源，inactive 時略為落後可接受）
+  - `_poll_loop` 改用 `_reinit_flag.wait(timeout=1.0)` 取代 `time.sleep`，旗標觸發立即喚醒
+- **`/api/feed` 加 `?mode=` 參數**：更新指向正確的 store；inactive store 更新靜默儲存、不廣播
+- **合約數各自追蹤**：`_subscribed_count_full` / `_subscribed_count_day`，顯示 active 那個
+- **資料時間各自追蹤**：`_last_updated_full` / `_last_updated_day`，顯示 active 那個
+- **圖表座標軸獨立**：切換模式時前端 `forceReset=true`，slider 重置到全範圍，Y 軸依新資料重算，不沿用舊 scale
+
+---
+
 ## v2.5 (2026-03-24)
 
 ### 新增：新富邦e01 DDE 橋接（xqfap_feed.py）

@@ -134,17 +134,24 @@ chart.getZr().on('mousemove', function(e) {
 
 chart.getZr().on('mouseout', _clearHover);
 
-// ── 日盤 / 日+夜 切換 ─────────────────────────────────
-let showDayOnly = false;
+// ── 全日盤 / 日盤(一般) 切換 ──────────────────────────
+const showDayOnly = false;  // 保留供 _day suffix 邏輯使用，固定 false
 
-const sessionToggleBtn = document.getElementById('session-toggle');
-sessionToggleBtn.addEventListener('click', () => {
-  showDayOnly = !showDayOnly;
-  sessionToggleBtn.textContent = showDayOnly ? '日盤' : '日+夜';
-  sessionToggleBtn.classList.toggle('active', !showDayOnly);
-  // 用最近一次的 rows 重繪
-  if (window._lastRows) updateTable(window._lastRows);
-});
+const btnFull = document.getElementById('btn-full-session');
+const btnDay  = document.getElementById('btn-day-session');
+
+function _setSessionMode(mode) {
+  btnFull.classList.toggle('active', mode === 'full');
+  btnDay.classList.toggle('active',  mode === 'day');
+  fetch('/api/set-session', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ mode }),
+  }).catch(() => {});
+}
+
+btnFull.addEventListener('click', () => _setSessionMode('full'));
+btnDay.addEventListener('click',  () => _setSessionMode('day'));
 
 // ── 表格最大絕對值（用來計算 bar 寬度比例） ────────────
 let maxAbsNet = 1;
@@ -156,10 +163,28 @@ const prevValues = {};  // key: `${strike}_C` / `${strike}_P` / etc.
 let _nouiSlider  = null;
 let _sliderMin   = 0, _sliderMax = 0;
 
-function _initSlider(minS, maxS) {
+function _recalcYAxis(xMin, xMax) {
+  const vis = [];
+  for (let i = 0; i < _chartStrikes.length; i++) {
+    if (_chartStrikes[i] >= xMin && _chartStrikes[i] <= xMax)
+      vis.push(_chartPnl[i]);
+  }
+  const yL = _interpolate(xMin), yR = _interpolate(xMax);
+  if (yL !== null) vis.push(yL);
+  if (yR !== null) vis.push(yR);
+  if (vis.length === 0) return;
+  let yMin = Math.min(...vis), yMax = Math.max(...vis);
+  const pad = (yMax - yMin) * 0.12 || 10;
+  chart.setOption({
+    xAxis: { min: xMin, max: xMax },
+    yAxis: { min: yMin - pad, max: yMax + pad },
+  }, { notMerge: false, lazyUpdate: false });
+}
+
+function _initSlider(minS, maxS, forceReset = false) {
   const el = document.getElementById('range-slider');
   if (_nouiSlider) {
-    if (minS === _sliderMin && maxS === _sliderMax) return;
+    if (!forceReset && minS === _sliderMin && maxS === _sliderMax) return;
     _nouiSlider.updateOptions({ range: { min: minS, max: maxS } }, true);
     _nouiSlider.set([minS, maxS]);
   } else {
@@ -179,27 +204,7 @@ function _initSlider(minS, maxS) {
       if (_sliderRaf) cancelAnimationFrame(_sliderRaf);
       _sliderRaf = requestAnimationFrame(() => {
         _sliderRaf = null;
-        const xMin = Number(values[0]);
-        const xMax = Number(values[1]);
-
-        // 計算可見範圍內的 Y 極值（含邊界插值點）
-        const vis = [];
-        for (let i = 0; i < _chartStrikes.length; i++) {
-          if (_chartStrikes[i] >= xMin && _chartStrikes[i] <= xMax)
-            vis.push(_chartPnl[i]);
-        }
-        const yL = _interpolate(xMin), yR = _interpolate(xMax);
-        if (yL !== null) vis.push(yL);
-        if (yR !== null) vis.push(yR);
-
-        let yMin = Math.min(...vis), yMax = Math.max(...vis);
-        const pad = (yMax - yMin) * 0.12 || 10;
-        yMin -= pad;  yMax += pad;
-
-        chart.setOption({
-          xAxis: { min: xMin, max: xMax },
-          yAxis: { min: yMin, max: yMax },
-        }, { notMerge: false, lazyUpdate: false });
+        _recalcYAxis(Number(values[0]), Number(values[1]));
       });
     });
   }
@@ -208,12 +213,13 @@ function _initSlider(minS, maxS) {
 }
 
 // ── 更新右側損益圖 ─────────────────────────────────────
-function updateChart(pnl) {
+function updateChart(pnl, forceReset = false) {
   if (!pnl || !pnl.strikes || pnl.strikes.length === 0) return;
 
   _chartStrikes = pnl.strikes;
   _chartPnl     = pnl.pnl.map(v => Math.round(v * 10000 * 10) / 10);  // 億→萬，1位小數
-  _initSlider(Math.min(..._chartStrikes), Math.max(..._chartStrikes));
+  const minS = Math.min(..._chartStrikes);
+  const maxS = Math.max(..._chartStrikes);
 
   const posData  = _chartStrikes.map((s, i) => [s, Math.max(_chartPnl[i], 0)]);
   const negData  = _chartStrikes.map((s, i) => [s, Math.min(_chartPnl[i], 0)]);
@@ -226,6 +232,10 @@ function updateChart(pnl) {
       { name: '合併損益', data: mainData },
     ],
   }, false);
+
+  _initSlider(minS, maxS, forceReset);
+  // 模式切換時 slider 可能不觸發 update（範圍未變），直接強制重算 Y 軸
+  if (forceReset) _recalcYAxis(minS, maxS);
 }
 
 // ── DOM helper ────────────────────────────────────────
@@ -353,13 +363,16 @@ function updateStatus(status, settlement) {
 // ── 上次收到資料的時間戳 ────────────────────────────
 let lastDataTime = 0;
 let dataSource = '--';
+let _currentSessionMode = null;
 
 // ── 通用資料處理（WS + polling 共用） ────────────────
 function handleData(data, source) {
   lastDataTime = Date.now();
   dataSource = source || 'WS';
+  const modeChanged = data.session_mode !== _currentSessionMode;
+  _currentSessionMode = data.session_mode;
   updateTable(data.table);
-  updateChart(data.pnl);
+  updateChart(data.pnl, modeChanged);
   updateStatus(data.status, data.settlement);
 }
 
