@@ -67,12 +67,10 @@ body {
 /* T字表水平捲動包裹層 */
 #table-scroll {
   flex: 1;
-  overflow-x: auto;
+  overflow-x: hidden;
   overflow-y: hidden;
   display: flex;
   flex-direction: column;
-  scrollbar-width: thin;
-  scrollbar-color: #30363d transparent;
   min-height: 0;
 }
 
