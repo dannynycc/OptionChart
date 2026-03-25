@@ -434,6 +434,37 @@ def _auto_reinit_scheduler():
         _reinit_flag.set()
 
 
+# ── 合約下拉清單推送 ──────────────────────────────────────────
+
+def _post_contracts(found: list):
+    """將有效系列清單（依到期日排序）推送到 main.py /api/contracts"""
+    import taifex_calendar as tc
+    now = datetime.datetime.now()
+    _WD = ['一', '二', '三', '四', '五', '六', '日']
+    contracts = []
+    for series in found:
+        n_idx  = series.index('N')
+        prefix = series[:n_idx]
+        month  = int(series[n_idx + 1:])
+        year   = now.year if month >= now.month else now.year + 1
+        sd     = tc.settlement_date(prefix, year, month)
+        label  = tc.tf_name_label(prefix, month)
+        sd_str     = str(sd) if sd else ''
+        sd_display = f"{sd_str}({_WD[sd.weekday()]})" if sd else '--'
+        contracts.append({
+            'series':             series,
+            'label':              label,
+            'settlement_date':    sd_str,
+            'settlement_display': sd_display,
+        })
+    try:
+        requests.post(f"{SERVER_URL}/api/contracts",
+                      json={'contracts': contracts}, timeout=5)
+        logger.info(f"已推送合約下拉清單（{len(contracts)} 個系列）")
+    except Exception as e:
+        logger.warning(f"推送合約清單失敗：{e}")
+
+
 # ── --discover 模式 ───────────────────────────────────────────
 
 # TAIFEX 前綴清單（按到期順序）
@@ -539,6 +570,10 @@ def main():
     _post_init(contracts_day,  mode="day")
     _push_snapshot(_meta_full, "full")
     _push_snapshot(_meta_day,  "day")
+
+    # 掃描所有有效系列並推送合約下拉清單（已有 DDE 連線，複用）
+    valid_series = _scan_valid_series(center)
+    _post_contracts(valid_series)
 
     threading.Thread(target=_auto_reinit_scheduler, daemon=True).start()
 

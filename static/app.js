@@ -334,9 +334,58 @@ function updateTable(rows) {
   }
 }
 
+// ── 合約下拉選單 ───────────────────────────────────────
+let _contractsData = [];
+
+async function fetchContracts() {
+  try {
+    const resp = await fetch('/api/contracts');
+    if (!resp.ok) return false;
+    const data = await resp.json();
+    const list = data.contracts || [];
+    if (list.length === 0) return false;
+
+    _contractsData = list;
+    const sel = document.getElementById('contract-select');
+    while (sel.options.length) sel.remove(0);
+
+    const today = new Date().toISOString().slice(0, 10); // "2026-03-25"
+    let defaultIdx = list.findIndex(c => c.settlement_date >= today);
+    if (defaultIdx < 0) defaultIdx = 0;
+
+    list.forEach((c, i) => {
+      const opt = document.createElement('option');
+      opt.value = i;
+      opt.textContent = `合約:${c.label}  期交所代碼:${c.series}`;
+      sel.appendChild(opt);
+    });
+
+    sel.value = defaultIdx;
+    document.getElementById('settlement-date').textContent =
+      list[defaultIdx].settlement_display;
+
+    sel.onchange = () => {
+      const c = _contractsData[parseInt(sel.value)];
+      if (c) document.getElementById('settlement-date').textContent = c.settlement_display;
+    };
+    return true;
+  } catch(e) {
+    console.warn('fetchContracts failed', e);
+    return false;
+  }
+}
+
+async function _initContracts() {
+  const ok = await fetchContracts();
+  if (!ok) setTimeout(_initContracts, 2000);  // xqfap 尚未推送，2 秒後重試
+}
+_initContracts();
+
 // ── 更新頂部工具列與狀態角落 ──────────────────────────
 function updateStatus(status, settlement) {
-  if (settlement) {
+  // 下拉選單已有資料時，結算日由選單驅動，不被 WS 覆寫
+  const sel = document.getElementById('contract-select');
+  if ((!sel || sel.options.length === 0) && settlement) {
     document.getElementById('settlement-date').textContent = settlement;
   }
   if (status) {

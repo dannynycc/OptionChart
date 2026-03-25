@@ -29,6 +29,7 @@ store_day:  dict[str, OptionData] = {}
 _lock = threading.Lock()
 
 _settlement_date:        str   = ""
+_contracts_cache:        list  = []   # [{series, label, settlement_date, settlement_display}, ...]
 _subscribed_count_full:  int   = 0
 _subscribed_count_day:   int   = 0
 _last_updated_full:      float = 0.0
@@ -235,6 +236,22 @@ async def api_set_session(payload: SessionModePayload):
 @app.get("/api/get-session")
 async def api_get_session():
     return {"mode": _session_mode}
+
+# ── 合約下拉清單端點 ──────────────────────────────────────────
+
+class ContractsPayload(BaseModel):
+    contracts: list[dict]
+
+@app.post("/api/contracts")
+async def api_contracts_post(payload: ContractsPayload):
+    global _contracts_cache
+    _contracts_cache = payload.contracts
+    logger.info(f"contracts cache 更新：{len(_contracts_cache)} 個系列")
+    return {"ok": True, "count": len(_contracts_cache)}
+
+@app.get("/api/contracts")
+async def api_contracts_get():
+    return {"contracts": _contracts_cache}
 
 # ── 一般 HTTP 端點 ────────────────────────────────────────────
 
