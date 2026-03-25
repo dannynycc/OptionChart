@@ -1,5 +1,25 @@
 # Changelog
 
+## v2.16 (2026-03-25)
+
+### 新增：工具列合約下拉選單 + 期交所代號欄
+
+**功能說明**：
+- 網頁啟動時自動掃描 XQFAP 所有有效系列（`_scan_valid_series()`），結果依結算日排序後推送至 `/api/contracts`
+- 前端工具列新增「合約選擇」下拉選單，預設選最近未到期合約
+- 新增「期交所代號」欄位（位於「日盤(一般)」按鈕右側），隨合約選擇 + 日/夜盤切換即時更新
+- 結算日格式改為 `2026-03-25(三)`，含星期，並正確反映假日順延
+
+**變更檔案**：
+- **`main.py`**：新增 `_contracts_cache`、`POST /api/contracts`、`GET /api/contracts` 端點
+- **`xqfap_feed.py`**：新增 `_post_contracts()`；啟動後呼叫 `_scan_valid_series()` 掃全部有效系列並推送；結果依 `settlement_date` 排序
+- **`taifex_calendar.py`**：新增 `tf_name_label(prefix, month)` 回傳 XQFAP TF-Name 標籤（`03W4` / `03F4` / `04`）；`fetch_holidays()` 修正 SSL 憑證驗證（TWSE 憑證缺 SKI）；`--discover` 輸出依結算日排序並顯示標籤
+- **`static/index.html`**：工具列加「合約選擇」`<select>`、「期交所代號」`<span>`
+- **`static/app.js`**：`fetchContracts()` + `_updateSeriesCode()`；`handleData` 修正 WS session_mode 同步按鈕視覺（修正期交所代號顯示全日盤卻顯示 TX403 的 bug）
+- **`static/style.css`**：`#contract-select` 粗體藍色；移除 T字表底部水平 scrollbar（`#table-scroll overflow-x: hidden`）
+
+---
+
 ## v2.15 (2026-03-25)
 
 ### 新增：taifex_calendar.py — TAIFEX 選擇權合約完整邏輯模組
