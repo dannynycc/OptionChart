@@ -1,5 +1,25 @@
 # Changelog
 
+## v2.15 (2026-03-25)
+
+### 新增：taifex_calendar.py — TAIFEX 選擇權合約完整邏輯模組
+
+將 TAIFEX 臺指選擇權的命名規則、結算日推導、有效合約掃描邏輯整理為獨立模組。
+
+**`taifex_calendar.py`**（新增）：
+- `PREFIX_RULES`：10 個前綴代碼完整定義（TX1/TX2/TXO/TX4/TX5 週三；TXU/TXV/TXX/TXY/TXZ 週五）
+- `nth_weekday(year, month, n, weekday)`：計算當月第 N 個指定週幾
+- `fetch_holidays(year)`：從 TWSE 取得年度休市日（LRU 快取，不重複 fetch）
+- `next_trading_day(date, holidays)`：若當日為休市日則順延至最近交易日
+- `settlement_date(prefix, year, month)`：計算含假日順延的實際結算日
+- `series_full(prefix, month)` / `series_day(prefix, month)`：全日盤/日盤系列碼
+- `day_from_full(full_series)`：全日盤 → 日盤（去掉 N）
+- `build_scan_plan(center)`：產生 120 組 XQFAP 探索測試（當前2月10前綴+後10月TXO×4測試點）
+
+**`CLAUDE.md`**（更新）：加入 TAIFEX 命名規則參考說明，指向 taifex_calendar.py。
+
+---
+
 ## v2.8 (2026-03-25)
 
 ### 修正：均價（AvgPrice）小數精度遺失
