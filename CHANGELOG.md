@@ -1,5 +1,30 @@
 # Changelog
 
+## v2.22 (2026-03-26)
+
+### xqfap_feed.py 啟動速度 + 主畫面更新頻率進一步優化
+
+**poll_loop 節拍從 1s 縮短至 0.1s**
+- `_reinit_flag.wait(timeout=1.0)` → `0.1s`
+- Active 系列每輪最多等 0.1s，實際輪詢上限從 ~1s 提升至幾乎無延遲（受限 DDE 呼叫本身耗時）
+
+**啟動時只立即探索第一個合約（active），其餘排入背景佇列**
+- `fast_list = series_with_sd[:1]`，其餘 3 個放入 `_bg_load_queue`
+- 第一個合約探索完即進入 `_poll_loop`，主畫面立刻開始快速更新
+- 其他合約由 `_poll_loop` 背景每輪載入一個，不阻塞主畫面
+
+**AvgPrice 延遲讀取（vol/ratio 不變時跳過 DDEML call）**
+- 只有 `InOutRatio` 或 `TotalVolume` 有異動才呼叫 `_get_avg_price()`
+- 靜盤時節省大量 DDEML 開銷
+
+**非 active 系列間隔調整**
+- `_SLOW_FULL = 15`（原 10）
+
+**變更檔案**：
+- **`xqfap_feed.py`**：`timeout=0.1`；`fast_list[:1]` + `_bg_load_queue`；AvgPrice 延遲讀取；`_SLOW_FULL=15`
+
+---
+
 ## v2.21 (2026-03-26)
 
 ### xqfap_feed.py 輪詢效能優化

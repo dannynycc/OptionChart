@@ -1,5 +1,5 @@
 """
-xqfap_feed.py — 新富邦e01 DDE 橋接 (v2.18)
+xqfap_feed.py — 新富邦e01 DDE 橋接 (v2.22)
 讀取 XQFAP DDE server 的 InOutRatio + TotalVolume + AvgPrice
 推送至 FastAPI server (main.py) /api/init + /api/feed
 
@@ -330,7 +330,7 @@ _all_valid_series: list = []
 
 # 輪詢間隔（秒，real time）
 _FAST_FULL = 1   # active 系列
-_SLOW_FULL = 10  # 非 active 系列
+_SLOW_FULL = 15  # 非 active 系列
 
 _reinit_flag = threading.Event()
 
@@ -341,10 +341,9 @@ def _poll_meta(meta: dict, prev: dict) -> list:
         if _reinit_flag.is_set():
             break
         try:
-            # 跳過 Name 查詢（探索階段已確認存在，省 25% DDE calls）
+            # Vol + Ratio 先讀（快）；AvgPrice(DDEML)只在值有變動時才讀（省 DDEML calls）
             new_vol   = int(_to_float(_req(f"{symbol}.TF-TotalVolume")))
             new_ratio = _to_float(_req(f"{symbol}.TF-InOutRatio"))
-            new_avg   = _get_avg_price(symbol)
         except Exception:
             logger.warning("DDE 讀取異常，嘗試重連...")
             if _connect_dde():
@@ -352,6 +351,7 @@ def _poll_meta(meta: dict, prev: dict) -> list:
             break
         old = prev.get(symbol)
         if old is None or (new_ratio != old[0] or new_vol != old[1]):
+            new_avg = _get_avg_price(symbol)   # 只有值變動時才讀 AvgPrice
             batch.append({
                 'symbol':       symbol,
                 'trade_volume': new_vol,
@@ -412,7 +412,7 @@ def _poll_loop():
     hb_tick      = 0
 
     while True:
-        _reinit_flag.wait(timeout=1.0)
+        _reinit_flag.wait(timeout=0.1)
         hb_tick += 1
         if hb_tick % 60 == 0:
             logger.info(f"heartbeat: {[f'{s}={len(m)}' for s, m in _all_metas.items()]}")
@@ -451,6 +451,7 @@ def _poll_loop():
                     _post_feed(batch, series)
 
         # ── 非 Active 系列：每輪只輪詢一個（防止多個同時到期堆積）──
+        now = time.time()  # active 輪詢後重取時間，避免 elapsed 計算偏差
         for series, meta in list(_all_metas.items()):
             if _reinit_flag.is_set():
                 break
@@ -682,8 +683,8 @@ def main():
     series_with_sd = sorted(weekly + monthly, key=lambda x: x[1])
     logger.info(f"追蹤系列（3週+1月）：{[s for s, _ in series_with_sd]}")
 
-    fast_list      = series_with_sd   # 全部立即追蹤，無背景佇列
-    _bg_load_queue = []
+    fast_list      = series_with_sd[:1]          # 只立即探索第一個（active）
+    _bg_load_queue = list(series_with_sd[1:])    # 其餘排入背景佇列
 
     _tracked_full_series  = [s for s, _ in series_with_sd]
     _all_valid_series     = _tracked_full_series
