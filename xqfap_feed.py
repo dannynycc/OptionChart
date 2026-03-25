@@ -107,6 +107,21 @@ _DDE_TIMEOUT_MS   = 5000
 _CP_WINUNICODE    = 1200
 _APPCMD_CLIENTONLY = 0x0010
 
+# 64-bit Windows：handle 是 64-bit pointer。
+# restype / argtypes 兩端都必須宣告，否則 ctypes 預設 c_int（32-bit）截斷。
+_user32.DdeCreateStringHandleW.restype  = ctypes.c_void_p
+_user32.DdeCreateStringHandleW.argtypes = [ctypes.c_ulong, ctypes.c_wchar_p, ctypes.c_int]
+_user32.DdeFreeStringHandle.argtypes    = [ctypes.c_ulong, ctypes.c_void_p]
+_user32.DdeConnect.restype              = ctypes.c_void_p
+_user32.DdeConnect.argtypes             = [ctypes.c_ulong, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p]
+_user32.DdeClientTransaction.restype    = ctypes.c_void_p
+_user32.DdeClientTransaction.argtypes  = [
+    ctypes.c_void_p, ctypes.c_ulong, ctypes.c_void_p, ctypes.c_void_p,
+    ctypes.c_uint, ctypes.c_uint, ctypes.c_ulong, ctypes.POINTER(ctypes.c_ulong),
+]
+_user32.DdeGetData.argtypes             = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_ulong, ctypes.c_ulong]
+_user32.DdeFreeDataHandle.argtypes      = [ctypes.c_void_p]
+
 def _null_cb(a, b, c, d, e, f, g, h):
     return None
 _dde_callback  = _PFNCALLBACK(_null_cb)
