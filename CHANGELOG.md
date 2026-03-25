@@ -1,5 +1,35 @@
 # Changelog
 
+## v2.24 (2026-03-26)
+
+### xqfap_feed.py 雙重 DDE call 優化 — 靜盤 2x 加速、全範圍分層輪詢
+
+**優化①：TotalVolume 不變 → 直接 skip InOutRatio + AvgPrice**
+- 原本：每個 symbol 永遠讀 TotalVolume + InOutRatio（2 calls），值變才讀 AvgPrice
+- 現在：TotalVolume 不變 → InOutRatio 數學上必然不變（無新成交則 OutSize 不變）→ `continue`
+- 靜盤時：248 calls 從 2 calls/symbol → 1 call/symbol，節省 ~50% DDE 呼叫
+
+**優化②：分層輪詢（按距中心距離）**
+- 近價平（dist < 1500 點）：每輪全速更新
+- 中間（dist 1500~3000 點）：每 2 輪更新
+- 深 OTM/ITM（dist > 3000 點）：每 4 輪更新
+- 每輪有效 symbols：~112（原 248 的 45%）→ 預估活躍盤 ~4-5s/輪
+- 深 OTM 資料仍完整顯示（初始 snapshot 已推送），只是更新頻率降為每 ~40s
+
+**中心價快取（_get_center_cached）**
+- 每 30s 更新一次 FITX00 中心價，供分層輪詢計算距離用，不影響 DDE 主路徑
+
+**其他**
+- `_poll_ticks` module-level dict（per-series tick 計數，供分層輪詢使用）
+- `_poll_meta` 新增 `series` 參數
+
+**多執行緒評估（暫不實作）**：DDE thread affinity 限制 `_conv.Request()` 只能在建立 `_conv` 的 thread 上呼叫。理論上可建多個獨立 DDE 連線（每 thread 各自 CreateServer+ConnectTo），但 pywin32 global state 與 XQFAP 多連線支援未驗證，風險未知，留待後續測試。
+
+**變更檔案**：
+- **`xqfap_feed.py`**：`import re`；`_poll_ticks`/`_center_cache*/`_TIER*` 常數；`_get_center_cached()`；`_poll_meta` 分層+skip 邏輯
+
+---
+
 ## v2.23 (2026-03-26)
 
 ### xqfap_feed.py 非 active 系列不再干擾主畫面更新頻率
