@@ -413,6 +413,31 @@ async function _initContracts() {
 }
 _initContracts();
 
+// ── 定期刷新合約 live 狀態（背景載入完成時移除 · 標記）──
+setInterval(async () => {
+  if (!_contractsData.length) return;
+  try {
+    const resp = await fetch('/api/contracts');
+    if (!resp.ok) return;
+    const data = await resp.json();
+    const list = data.contracts || [];
+    if (list.length !== _contractsData.length) return;  // 清單結構不同，跳過
+
+    const sel = document.getElementById('contract-select');
+    let anyNewLive = false;
+    list.forEach((c, i) => {
+      if (!_contractsData[i].live && c.live) {
+        _contractsData[i].live = true;
+        anyNewLive = true;
+        if (sel.options[i]) sel.options[i].textContent = c.label;  // 移除 ·
+      }
+    });
+    if (anyNewLive) {
+      console.log('背景系列載入完成，下拉選單已更新');
+    }
+  } catch(e) {}
+}, 5000);
+
 // ── 更新頂部工具列與狀態角落 ──────────────────────────
 function updateStatus(status, settlement) {
   // 下拉選單已有資料時，結算日由選單驅動，不被 WS 覆寫

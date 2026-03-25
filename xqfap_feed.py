@@ -1,11 +1,17 @@
 """
-xqfap_feed.py — 新富邦e01 DDE 橋接 (v2.11)
+xqfap_feed.py — 新富邦e01 DDE 橋接 (v2.18)
 讀取 XQFAP DDE server 的 InOutRatio + TotalVolume + AvgPrice
 推送至 FastAPI server (main.py) /api/init + /api/feed
 
 【架構】
   pywin32 DDE  → Name / TotalVolume / InOutRatio 探索與輪詢（無 item quota 限制）
   DDEML ctypes → AvgPrice 專用（修正 pywin32 小數截斷 bug）
+
+【Progressive Loading】
+  啟動時：掃描所有有效系列 → 前 3 個立即探索（fast tier）→ 其餘排入背景佇列（slow tier）
+  Fast tier：全日盤每 1s、日盤每 3s
+  Slow tier：全日盤每 10s、日盤每 30s
+  背景佇列：_poll_loop 主線程每輪處理一個（保留 DDE thread affinity）
 
 【執行方式】
   python xqfap_feed.py              # 正常執行
@@ -310,11 +316,23 @@ def _push_snapshot(meta: dict, series: str):
 
 
 # ── 主輪詢迴圈 ────────────────────────────────────────────────
-# _all_metas: {series → meta_dict}，包含所有被追蹤系列的 full + day
-# _all_prevs: {series → prev_dict}，用於偵測變動
+# _all_metas:  {series → meta_dict}，包含所有被追蹤系列的 full + day
+# _all_prevs:  {series → prev_dict}，用於偵測變動
+# _fast_series: fast tier（前 3 系列）的 series key 集合
+# _bg_load_queue: 尚未探索的系列 (full_series, sd_str) 佇列
+# _all_valid_series: scan 到的全部有效系列（供 _post_contracts 更新 live 旗標）
 
-_all_metas: dict = {}
-_all_prevs: dict = {}
+_all_metas:        dict = {}
+_all_prevs:        dict = {}
+_fast_series:      set  = set()
+_bg_load_queue:    list = []
+_all_valid_series: list = []
+
+# 輪詢間隔（單位：tick，1 tick ≈ 1 秒）
+_FAST_FULL = 1
+_FAST_DAY  = 3
+_SLOW_FULL = 10
+_SLOW_DAY  = 30
 
 _reinit_flag = threading.Event()
 
@@ -348,10 +366,37 @@ def _poll_meta(meta: dict, prev: dict) -> list:
     return batch
 
 
+def _load_one_series(center: int, full_series: str, sd_str: str):
+    """探索並初始化單一系列，加入 _all_metas（慢速 tier）"""
+    _series_sd[full_series] = sd_str
+    contracts_full, meta_full = _discover_contracts(center, full_series)
+    if not contracts_full:
+        logger.warning(f"背景載入 {full_series} 失敗，跳過")
+        return
+    day_series                = full_series.replace('N', '')
+    contracts_day, meta_day   = _build_day_meta(meta_full, full_series)
+    _post_init(contracts_full, full_series, sd_str)
+    _post_init(contracts_day,  day_series,  sd_str)
+    _all_metas[full_series]   = meta_full
+    _all_metas[day_series]    = meta_day
+    _all_prevs[full_series]   = {}
+    _all_prevs[day_series]    = {}
+    _push_snapshot(meta_full, full_series)
+    _push_snapshot(meta_day,  day_series)
+    logger.info(f"背景載入完成：{full_series} / {day_series}（slow tier，{_SLOW_FULL}s 更新）")
+    _post_contracts(_all_valid_series)  # 通知前端移除 ·
+
+
 def _poll_loop():
-    """輪詢所有被追蹤系列；full 系列每輪，day 系列每 3 輪"""
-    tick     = 0
-    day_tick = 0
+    """
+    輪詢所有被追蹤系列。
+    Fast tier（前 3 系列）：全日盤每 1s、日盤每 3s。
+    Slow tier（背景載入）：全日盤每 10s、日盤每 30s。
+    背景佇列每輪處理一個（保留 DDE thread affinity）。
+    """
+    tick         = 0
+    series_ticks: dict[str, int] = {}   # series → 上次輪詢的 tick
+
     while True:
         _reinit_flag.wait(timeout=1.0)
         tick += 1
@@ -361,32 +406,32 @@ def _poll_loop():
         if _reinit_flag.is_set():
             _reinit_flag.clear()
             _reinit()
+            series_ticks.clear()
             for s, m in list(_all_metas.items()):
                 _push_snapshot(m, s)
-            day_tick = 0
             continue
 
-        # full 系列（含 N）：每輪輪詢
+        # 背景佇列：每輪探索一個尚未載入的系列
+        if _bg_load_queue:
+            center = _get_center_price()
+            full_series, sd_str = _bg_load_queue.pop(0)
+            _load_one_series(center, full_series, sd_str)
+
+        # 輪詢所有已追蹤系列（依 fast/slow tier 決定間隔）
         for series, meta in list(_all_metas.items()):
-            if 'N' not in series:
-                continue
             if _reinit_flag.is_set():
                 break
+            is_full  = 'N' in series
+            interval = (
+                (_FAST_FULL if is_full else _FAST_DAY) if series in _fast_series
+                else (_SLOW_FULL if is_full else _SLOW_DAY)
+            )
+            if tick - series_ticks.get(series, 0) < interval:
+                continue
+            series_ticks[series] = tick
             batch = _poll_meta(meta, _all_prevs[series])
             if batch:
                 _post_feed(batch, series)
-
-        # day 系列（不含 N）：每 3 輪輪詢一次
-        day_tick += 1
-        if day_tick % 3 == 0:
-            for series, meta in list(_all_metas.items()):
-                if 'N' in series:
-                    continue
-                if _reinit_flag.is_set():
-                    break
-                batch = _poll_meta(meta, _all_prevs[series])
-                if batch:
-                    _post_feed(batch, series)
 
 
 # ── 自動重新初始化排程 ────────────────────────────────────────
@@ -415,11 +460,14 @@ _series_sd: dict = {}
 
 
 def _reinit():
+    """重新探索並初始化所有目前正在追蹤的系列（盤前排程觸發）"""
     global _all_metas, _all_prevs
-    center   = _get_center_price()
-    new_metas = {}
-    new_prevs = {}
-    for full_series in _tracked_full_series:
+    center     = _get_center_price()
+    # 從 _all_metas 取出所有 full series（含 N 的），原 slow/fast 分類保持不變
+    full_series_list = [s for s in _all_metas if 'N' in s]
+    new_metas  = {}
+    new_prevs  = {}
+    for full_series in full_series_list:
         contracts_full, meta_full = _discover_contracts(center, full_series)
         if not contracts_full:
             logger.error(f"重新初始化失敗：{full_series} 找不到合約")
@@ -563,10 +611,10 @@ def _do_discover():
 
 def main():
     global _all_metas, _all_prevs, _tracked_full_series, _series_sd
+    global _fast_series, _bg_load_queue, _all_valid_series
 
     if not _connect_dde():
         sys.exit(1)
-
     _connect_ddeml()
 
     if MODE == '--discover':
@@ -575,18 +623,20 @@ def main():
 
     center = _get_center_price()
 
-    # 掃描有效系列（含結算日排序），取最近 2 個作為追蹤目標
+    # 掃描所有有效系列（含結算日排序）
     valid_series = _scan_valid_series(center)
     if not valid_series:
         logger.error("找不到任何有效系列！請確認新富邦e01已開啟。")
         sys.exit(1)
 
+    _all_valid_series = valid_series  # 供 _load_one_series 呼叫 _post_contracts 使用
+
     import taifex_calendar as tc
     now   = datetime.datetime.now()
     today = now.date()
 
-    # 選取結算日 >= 今天的最近 2 個系列
-    to_track = []
+    # 計算各系列結算日，過濾已到期
+    series_with_sd = []
     for series in valid_series:
         n_idx  = series.index('N')
         prefix = series[:n_idx]
@@ -594,35 +644,39 @@ def main():
         year   = now.year if month >= now.month else now.year + 1
         sd     = tc.settlement_date(prefix, year, month)
         if sd and sd >= today:
-            to_track.append((series, str(sd)))
-        if len(to_track) == 2:
-            break
+            series_with_sd.append((series, str(sd)))
 
-    if not to_track:
+    if not series_with_sd:
         logger.error("找不到有效系列（結算日 >= 今天）！")
         sys.exit(1)
 
-    logger.info(f"追蹤系列：{[s for s, _ in to_track]}")
-    _tracked_full_series = [s for s, _ in to_track]
+    # 前 3 個系列立即探索（fast tier），其餘排入背景佇列（slow tier）
+    fast_list      = series_with_sd[:3]
+    _bg_load_queue = list(series_with_sd[3:])
 
-    # 探索各系列合約並推送 init + 初始快照
+    logger.info(f"立即追蹤（fast tier，前{len(fast_list)}個）：{[s for s, _ in fast_list]}")
+    if _bg_load_queue:
+        logger.info(f"背景排程（slow tier，共{len(_bg_load_queue)}個）：{[s for s, _ in _bg_load_queue]}")
+
+    _tracked_full_series = [s for s, _ in series_with_sd]
+
+    # 立即探索 fast 系列
     _all_metas = {}
     _all_prevs = {}
-    for full_series, sd_str in to_track:
+    for full_series, sd_str in fast_list:
         _series_sd[full_series] = sd_str
         contracts_full, meta_full = _discover_contracts(center, full_series)
         if not contracts_full:
             logger.warning(f"{full_series} 探索失敗，跳過")
             continue
-
         day_series    = full_series.replace('N', '')
         contracts_day, meta_day = _build_day_meta(meta_full, full_series)
-
         _all_metas[full_series] = meta_full
         _all_metas[day_series]  = meta_day
         _all_prevs[full_series] = {}
         _all_prevs[day_series]  = {}
-
+        _fast_series.add(full_series)
+        _fast_series.add(day_series)
         _post_init(contracts_full, full_series, sd_str)
         _post_init(contracts_day,  day_series,  sd_str)
         _push_snapshot(meta_full, full_series)
@@ -632,12 +686,15 @@ def main():
         logger.error("所有系列探索失敗！")
         sys.exit(1)
 
-    # 推送合約下拉清單
+    # 推送合約下拉清單（fast 系列 live=True，slow 系列 live=False 顯示 ·）
     _post_contracts(valid_series)
 
     threading.Thread(target=_auto_reinit_scheduler, daemon=True).start()
 
-    logger.info(f"開始輪詢：{list(_all_metas.keys())}...")
+    logger.info(
+        f"開始輪詢 fast={sorted(_fast_series)}；"
+        f"背景佇列 {len(_bg_load_queue)} 個系列待載入..."
+    )
     _poll_loop()
 
 
