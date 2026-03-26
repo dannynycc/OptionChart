@@ -129,6 +129,7 @@ _RESUBSCRIBE_COOLDOWN = 120.0   # 重新訂閱最短冷卻時間（秒）
 _XTYP_ADVSTOP        = 0x8040   # 0x0040 | XCLASS_NOTIFICATION
 _BG_POLL_INTERVAL    = 60       # 背景系列輪詢間隔（秒）
 _SWITCH_LISTENER_PORT = 8001    # main.py 切換系列時的 TCP 通知 port
+_BULK_REQ_THREADS    = 4        # bulk_request_series 並行 DDEML 連線數
 
 # 64-bit Windows：handle 是 64-bit pointer。
 # restype / argtypes 兩端都必須宣告，否則 ctypes 預設 c_int（32-bit）截斷。
@@ -630,47 +631,85 @@ def _bulk_request_series(full_series: str):
     """
     Worker thread：對 full_series 及其對應 day_series 的所有合約做一次全量 REQUEST，
     更新 _all_prevs 並 POST 到 FastAPI。切換 active series 後呼叫，補上錯過的資料。
+    _BULK_REQ_THREADS 條並行 DDEML 連線（各 thread-local），縮短等待時間。
     """
-    day_series  = full_series.replace('N', '')
-    full_batch  = []
-    day_batch   = []
-    full_meta   = _all_metas.get(full_series, {})
+    t0         = time.time()
+    day_series = full_series.replace('N', '')
+    full_meta  = _all_metas.get(full_series, {})
+    symbols    = list(full_meta.keys())
+    has_day    = day_series in _all_metas
 
-    for full_sym in list(full_meta.keys()):
-        day_sym = full_sym.replace(full_series, day_series, 1)
+    n_threads  = min(_BULK_REQ_THREADS, len(symbols)) if symbols else 1
+    # interleaved slicing：讓各 thread 均勻分散到不同履約價
+    chunks     = [symbols[i::n_threads] for i in range(n_threads)]
 
-        # 全日盤
-        vol_str   = _req_thread(f"{full_sym}.TF-TotalVolume")
-        ratio_str = _req_thread(f"{full_sym}.TF-InOutRatio")
-        avg_str   = _req_thread(f"{full_sym}.TF-AvgPrice")
-        new_vol   = int(float(vol_str)) if vol_str else 0
-        new_ratio = _to_float(ratio_str)
-        new_avg   = _to_float(avg_str)
-        if new_vol > 0 or new_ratio > 0:
-            fp = _all_prevs.get(full_series)
-            if fp is not None:
-                fp[full_sym] = (new_ratio, new_vol)
-            full_batch.append({'symbol': full_sym, 'trade_volume': new_vol,
-                                'inout_ratio': new_ratio, 'avg_price': new_avg})
+    full_results: list = []
+    day_results:  list = []
+    merge_lock = threading.Lock()
 
-        # 日盤（獨立 REQUEST，非改名）
-        if day_series in _all_metas:
-            d_vol_str   = _req_thread(f"{day_sym}.TF-TotalVolume")
-            d_ratio_str = _req_thread(f"{day_sym}.TF-InOutRatio")
-            d_avg_str   = _req_thread(f"{day_sym}.TF-AvgPrice")
-            d_vol   = int(float(d_vol_str)) if d_vol_str else 0
-            d_ratio = _to_float(d_ratio_str)
-            d_avg   = _to_float(d_avg_str)
-            if d_vol > 0 or d_ratio > 0:
-                dp = _all_prevs.get(day_series)
-                if dp is not None:
-                    dp[day_sym] = (d_ratio, d_vol)
-                day_batch.append({'symbol': day_sym, 'trade_volume': d_vol,
-                                   'inout_ratio': d_ratio, 'avg_price': d_avg})
+    def _worker(chunk: list):
+        local_full: list = []
+        local_day:  list = []
+        for full_sym in chunk:
+            day_sym = full_sym.replace(full_series, day_series, 1)
 
+            # 全日盤
+            vol_str   = _req_thread(f"{full_sym}.TF-TotalVolume")
+            ratio_str = _req_thread(f"{full_sym}.TF-InOutRatio")
+            avg_str   = _req_thread(f"{full_sym}.TF-AvgPrice")
+            new_vol   = int(float(vol_str)) if vol_str else 0
+            new_ratio = _to_float(ratio_str)
+            new_avg   = _to_float(avg_str)
+            if new_vol > 0 or new_ratio > 0:
+                local_full.append({'symbol': full_sym, 'trade_volume': new_vol,
+                                   'inout_ratio': new_ratio, 'avg_price': new_avg,
+                                   '_ratio': new_ratio, '_vol': new_vol})
+
+            # 日盤（獨立 REQUEST，非改名）
+            if has_day:
+                d_vol_str   = _req_thread(f"{day_sym}.TF-TotalVolume")
+                d_ratio_str = _req_thread(f"{day_sym}.TF-InOutRatio")
+                d_avg_str   = _req_thread(f"{day_sym}.TF-AvgPrice")
+                d_vol   = int(float(d_vol_str)) if d_vol_str else 0
+                d_ratio = _to_float(d_ratio_str)
+                d_avg   = _to_float(d_avg_str)
+                if d_vol > 0 or d_ratio > 0:
+                    local_day.append({'symbol': day_sym, 'trade_volume': d_vol,
+                                      'inout_ratio': d_ratio, 'avg_price': d_avg,
+                                      '_day_sym': day_sym, '_ratio': d_ratio, '_vol': d_vol})
+
+        with merge_lock:
+            full_results.extend(local_full)
+            day_results.extend(local_day)
+
+    threads = [threading.Thread(target=_worker, args=(chunk,), daemon=True)
+               for chunk in chunks]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    # 更新 _all_prevs
+    fp = _all_prevs.get(full_series)
+    if fp is not None:
+        for item in full_results:
+            fp[item['symbol']] = (item['_ratio'], item['trade_volume'])
+    dp = _all_prevs.get(day_series)
+    if dp is not None:
+        for item in day_results:
+            dp[item['symbol']] = (item['_ratio'], item['trade_volume'])
+
+    # 清掉內部 helper key 再 POST
+    full_batch = [{k: v for k, v in r.items() if not k.startswith('_')}
+                  for r in full_results]
+    day_batch  = [{k: v for k, v in r.items() if not k.startswith('_')}
+                  for r in day_results]
+
+    elapsed = time.time() - t0
     if full_batch:
         _post_feed(full_batch, full_series)
-        logger.info(f"[bulk_req] {full_series} 刷新 {len(full_batch)} 筆")
+        logger.info(f"[bulk_req] {full_series} 刷新 {len(full_batch)} 筆"
+                    f"（{n_threads} threads，{elapsed:.1f}s）")
     if day_batch:
         _post_feed(day_batch, day_series)
         logger.info(f"[bulk_req] {day_series} 刷新 {len(day_batch)} 筆")
@@ -767,12 +806,13 @@ def _series_watcher():
 
 def _bg_poll_one_series(full_series: str, offset: float):
     """
-    背景 thread：每 _BG_POLL_INTERVAL 秒對非 active 的 full_series 做全量 REQUEST。
+    背景 thread：每 _BG_POLL_INTERVAL 秒對 full_series 做全量 REQUEST。
+    active series 也輪詢（盤後 advise 靜止時仍能更新 last_updated）。
     offset：啟動延遲（秒），讓各系列錯開不同時間輪詢。
     """
     time.sleep(offset)
     while True:
-        if full_series != _active_advise_series and full_series in _all_metas:
+        if full_series in _all_metas:
             logger.info(f"[bg_poll] 輪詢 {full_series}")
             _bulk_request_series(full_series)
         time.sleep(_BG_POLL_INTERVAL)

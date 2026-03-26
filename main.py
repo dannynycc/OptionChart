@@ -217,8 +217,9 @@ async def api_feed(updates: list[FeedItem], series: str = ""):
             if u.avg_price > 0:
                 opt.avg_price = u.avg_price
 
+    if found > 0:
+        _last_updated[series] = time.time()   # 有收到合約資料即更新（含盤後無變動）
     if value_changed:
-        _last_updated[series] = time.time()
         # 只有當前 active series 更新才廣播（背景 series 靜默儲存）
         active_key = _active_full if _session_mode == 'full' else _active_day
         if series == active_key:
