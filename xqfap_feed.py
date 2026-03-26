@@ -120,11 +120,14 @@ _TIMEOUT_ASYNC     = 0xFFFFFFFF  # ADVSTART 必須用非同步模式
 _DDE_FACK          = 0x8000
 _WM_APP_REINIT       = 0x8001   # PostThreadMessageW：觸發重新初始化
 _WM_APP_SUBSCRIBE    = 0x8002   # PostThreadMessageW：訂閱新合約 advise
+_WM_APP_SWITCH       = 0x8003   # PostThreadMessageW：切換 active series
 _WM_TIMER            = 0x0113   # Windows WM_TIMER
 _WATCHDOG_TIMER_ID   = 1        # SetTimer ID
 _WATCHDOG_INTERVAL   = 30000    # 30 秒觸發一次 WM_TIMER（ms）
 _WATCHDOG_THRESHOLD  = 60.0     # 超過 60 秒無 callback → 重新連線
 _RESUBSCRIBE_COOLDOWN = 120.0   # 重新訂閱最短冷卻時間（秒）
+_XTYP_ADVSTOP        = 0x8040   # 0x0040 | XCLASS_NOTIFICATION
+_BG_POLL_INTERVAL    = 60       # 背景系列輪詢間隔（秒）
 
 # 64-bit Windows：handle 是 64-bit pointer。
 # restype / argtypes 兩端都必須宣告，否則 ctypes 預設 c_int（32-bit）截斷。
@@ -211,6 +214,9 @@ _pending_subscribe: list = []
 _pending_subscribe_lock   = threading.Lock()
 _last_callback_time: float = 0.0   # 最後收到 ADVDATA 的時間
 _last_resubscribe_time: float = 0.0  # 最後重新訂閱的時間
+_active_advise_series: str  = ''     # 目前持有 advise 的 full series
+_pending_switch_series: str = ''     # 待切換的 full series（series_watcher → advise_loop）
+_pending_switch_lock        = threading.Lock()
 
 
 def _connect_ddeml() -> bool:
@@ -531,6 +537,22 @@ def _advise_subscribe(symbols: list):
     logger.info(f"ADVSTART：{ok} 成功，{fail} 失敗（共 {len(symbols)} 個合約）")
 
 
+def _advise_unsubscribe(symbols: list):
+    """對 symbols 發出 XTYP_ADVSTOP，取消 TF-TotalVolume advise 訂閱"""
+    if not _ddeml_hconv:
+        return
+    for sym in symbols:
+        item_str = f"{sym}.TF-TotalVolume"
+        hsz = _user32.DdeCreateStringHandleW(_ddeml_inst.value, item_str, _CP_WINUNICODE)
+        dr = ctypes.c_ulong(0)
+        _user32.DdeClientTransaction(
+            None, 0, _ddeml_hconv, hsz,
+            _CF_TEXT, _XTYP_ADVSTOP, 5000, ctypes.byref(dr),
+        )
+        _user32.DdeFreeStringHandle(_ddeml_inst.value, hsz)
+    logger.info(f"ADVSTOP：{len(symbols)} 個合約取消訂閱")
+
+
 _BATCH_WINDOW = 0.5   # 秒：每 0.5s 批次 REQUEST ratio/avg 並推送
 
 
@@ -558,8 +580,11 @@ def _advise_worker():
         if not changed:
             continue
 
-        by_series: dict = {}
+        by_series:     dict = {}
+        by_series_day: dict = {}
+
         for (series, symbol), new_vol in changed.items():
+            # ── 全日盤 REQUEST ──────────────────────────────
             ratio_str = _req_thread(f"{symbol}.TF-InOutRatio")
             avg_str   = _req_thread(f"{symbol}.TF-AvgPrice")
             new_ratio = _to_float(ratio_str)
@@ -574,16 +599,149 @@ def _advise_worker():
                 'avg_price':    new_avg,
             })
 
-        for series, batch in by_series.items():
-            _post_feed(batch, series)
-            # 同步推送對應 day series（e.g. TXYN03 → TXY03）
+            # ── 日盤獨立 REQUEST（不能用全日盤資料改名）──────
             day_series = series.replace('N', '')
             if day_series in _all_metas and day_series != series:
-                day_batch = [
-                    {**item, 'symbol': item['symbol'].replace(series, day_series, 1)}
-                    for item in batch
-                ]
-                _post_feed(day_batch, day_series)
+                day_sym       = symbol.replace(series, day_series, 1)
+                d_vol_str     = _req_thread(f"{day_sym}.TF-TotalVolume")
+                d_ratio_str   = _req_thread(f"{day_sym}.TF-InOutRatio")
+                d_avg_str     = _req_thread(f"{day_sym}.TF-AvgPrice")
+                d_vol         = int(float(d_vol_str)) if d_vol_str else 0
+                d_ratio       = _to_float(d_ratio_str)
+                d_avg         = _to_float(d_avg_str)
+                day_prev = _all_prevs.get(day_series)
+                if day_prev is not None:
+                    day_prev[day_sym] = (d_ratio, d_vol)
+                by_series_day.setdefault(day_series, []).append({
+                    'symbol':       day_sym,
+                    'trade_volume': d_vol,
+                    'inout_ratio':  d_ratio,
+                    'avg_price':    d_avg,
+                })
+
+        for series, batch in by_series.items():
+            _post_feed(batch, series)
+        for day_series, batch in by_series_day.items():
+            _post_feed(batch, day_series)
+
+
+def _bulk_request_series(full_series: str):
+    """
+    Worker thread：對 full_series 及其對應 day_series 的所有合約做一次全量 REQUEST，
+    更新 _all_prevs 並 POST 到 FastAPI。切換 active series 後呼叫，補上錯過的資料。
+    """
+    day_series  = full_series.replace('N', '')
+    full_batch  = []
+    day_batch   = []
+    full_meta   = _all_metas.get(full_series, {})
+
+    for full_sym in list(full_meta.keys()):
+        day_sym = full_sym.replace(full_series, day_series, 1)
+
+        # 全日盤
+        vol_str   = _req_thread(f"{full_sym}.TF-TotalVolume")
+        ratio_str = _req_thread(f"{full_sym}.TF-InOutRatio")
+        avg_str   = _req_thread(f"{full_sym}.TF-AvgPrice")
+        new_vol   = int(float(vol_str)) if vol_str else 0
+        new_ratio = _to_float(ratio_str)
+        new_avg   = _to_float(avg_str)
+        if new_vol > 0 or new_ratio > 0:
+            fp = _all_prevs.get(full_series)
+            if fp is not None:
+                fp[full_sym] = (new_ratio, new_vol)
+            full_batch.append({'symbol': full_sym, 'trade_volume': new_vol,
+                                'inout_ratio': new_ratio, 'avg_price': new_avg})
+
+        # 日盤（獨立 REQUEST，非改名）
+        if day_series in _all_metas:
+            d_vol_str   = _req_thread(f"{day_sym}.TF-TotalVolume")
+            d_ratio_str = _req_thread(f"{day_sym}.TF-InOutRatio")
+            d_avg_str   = _req_thread(f"{day_sym}.TF-AvgPrice")
+            d_vol   = int(float(d_vol_str)) if d_vol_str else 0
+            d_ratio = _to_float(d_ratio_str)
+            d_avg   = _to_float(d_avg_str)
+            if d_vol > 0 or d_ratio > 0:
+                dp = _all_prevs.get(day_series)
+                if dp is not None:
+                    dp[day_sym] = (d_ratio, d_vol)
+                day_batch.append({'symbol': day_sym, 'trade_volume': d_vol,
+                                   'inout_ratio': d_ratio, 'avg_price': d_avg})
+
+    if full_batch:
+        _post_feed(full_batch, full_series)
+        logger.info(f"[bulk_req] {full_series} 刷新 {len(full_batch)} 筆")
+    if day_batch:
+        _post_feed(day_batch, day_series)
+        logger.info(f"[bulk_req] {day_series} 刷新 {len(day_batch)} 筆")
+
+
+def _switch_active_series(new_full_series: str):
+    """
+    主執行緒（message loop）呼叫：切換 advise 訂閱至 new_full_series。
+    1. ADVSTOP 舊系列
+    2. ADVSTART 新系列
+    3. 背景 thread 做一次 bulk REQUEST 補資料
+    """
+    global _active_advise_series
+    old = _active_advise_series
+
+    if old and old != new_full_series:
+        old_syms = list(_all_metas.get(old, {}).keys())
+        logger.info(f"[switch] ADVSTOP {old}（{len(old_syms)} 個）")
+        _advise_unsubscribe(old_syms)
+
+    new_syms = list(_all_metas.get(new_full_series, {}).keys())
+    if new_syms:
+        logger.info(f"[switch] ADVSTART {new_full_series}（{len(new_syms)} 個）")
+        _advise_subscribe(new_syms)
+        _active_advise_series = new_full_series
+        _rebuild_sym_to_series()
+        # 背景補資料（不阻塞 message loop）
+        threading.Thread(target=_bulk_request_series,
+                         args=(new_full_series,), daemon=True).start()
+    else:
+        logger.warning(f"[switch] {new_full_series} 尚未載入，無法切換")
+
+
+def _series_watcher():
+    """
+    背景 thread：每 2s 輪詢 main.py /api/active-series，
+    偵測前端切換合約，透過 PostThreadMessageW 通知 advise loop。
+    """
+    global _pending_switch_series
+    last_seen = ''
+    while True:
+        try:
+            resp = requests.get(f"{SERVER_URL}/api/active-series", timeout=3)
+            if resp.ok:
+                new_full = resp.json().get('full', '')
+                if (new_full and new_full != last_seen
+                        and new_full in _all_metas
+                        and new_full != _active_advise_series):
+                    with _pending_switch_lock:
+                        _pending_switch_series = new_full
+                    if _advise_loop_tid:
+                        _user32.PostThreadMessageW(
+                            _advise_loop_tid, _WM_APP_SWITCH, 0, 0)
+                    last_seen = new_full
+                elif new_full:
+                    last_seen = new_full
+        except Exception:
+            pass
+        time.sleep(2)
+
+
+def _bg_poll_one_series(full_series: str, offset: float):
+    """
+    背景 thread：每 _BG_POLL_INTERVAL 秒對非 active 的 full_series 做全量 REQUEST。
+    offset：啟動延遲（秒），讓各系列錯開不同時間輪詢。
+    """
+    time.sleep(offset)
+    while True:
+        if full_series != _active_advise_series and full_series in _all_metas:
+            logger.info(f"[bg_poll] 輪詢 {full_series}")
+            _bulk_request_series(full_series)
+        time.sleep(_BG_POLL_INTERVAL)
 
 
 def _reconnect_and_resubscribe():
@@ -613,12 +771,12 @@ def _reconnect_and_resubscribe():
         _ddeml_hconv = None
         return
     _ddeml_hconv = hconv
-    # 只重訂第一個 full series（負載最小）
-    first_series = next((s for s in _all_metas if 'N' in s), None)
-    if first_series:
-        syms = list(_all_metas[first_series].keys())
+    # 重訂目前 active series（若無則用第一個）
+    target = _active_advise_series or next((s for s in _all_metas if 'N' in s), None)
+    if target:
+        syms = list(_all_metas[target].keys())
         _advise_subscribe(syms)
-        logger.info(f"[watchdog] 重新訂閱完成（{first_series}，{len(syms)} 個）")
+        logger.info(f"[watchdog] 重新訂閱完成（{target}，{len(syms)} 個）")
 
 
 def _advise_loop():
@@ -634,11 +792,13 @@ def _advise_loop():
     _advise_loop_tid = _kernel32.GetCurrentThreadId()
     logger.info(f"advise 訊息迴圈啟動（Win32 TID={_advise_loop_tid}）")
 
-    # 只訂閱第一個（最近到期）full series，降低 daqFAP 負載
+    # 訂閱第一個（最近到期）full series，設為 active
+    global _active_advise_series
     first_series = next((s for s in _all_metas if 'N' in s), None)
     if first_series:
         syms = list(_all_metas[first_series].keys())
         _advise_subscribe(syms)
+        _active_advise_series = first_series
     else:
         logger.error("advise_loop: 找不到任何 full series")
 
@@ -683,6 +843,13 @@ def _advise_loop():
             if syms:
                 _advise_subscribe(syms)
                 _rebuild_sym_to_series()
+            continue
+
+        if msg.message == _WM_APP_SWITCH:
+            with _pending_switch_lock:
+                target = _pending_switch_series
+            if target:
+                _switch_active_series(target)
             continue
 
         hb_tick += 1
@@ -1093,10 +1260,20 @@ def main():
 
     threading.Thread(target=_auto_reinit_scheduler, daemon=True).start()
     threading.Thread(target=_advise_worker, daemon=True).start()
+    threading.Thread(target=_series_watcher, daemon=True).start()
+
+    # 背景輪詢：每個 full series 一條 thread，錯開時間
+    full_series_list = [s for s in _all_metas if 'N' in s]
+    n = len(full_series_list)
+    for i, fs in enumerate(full_series_list):
+        offset = i * (_BG_POLL_INTERVAL / max(n, 1))
+        threading.Thread(target=_bg_poll_one_series,
+                         args=(fs, offset), daemon=True).start()
 
     logger.info(
         f"啟動 DDE Advise（push-based，取代輪詢）；"
-        f"已追蹤 {len(_all_metas)} 個系列"
+        f"已追蹤 {len(_all_metas)} 個系列；"
+        f"背景輪詢 {n} 個系列（間隔 {_BG_POLL_INTERVAL}s，錯開）"
     )
     _advise_loop()
 
