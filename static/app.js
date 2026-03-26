@@ -521,6 +521,7 @@ let _currentSessionMode = null;
 function handleData(data, source) {
   lastDataTime = Date.now();
   dataSource = source || 'WS';
+  if (_snapshotMode) return;  // 快照模式：忽略 live 資料
   const modeChanged = data.session_mode !== _currentSessionMode;
   _currentSessionMode = data.session_mode;
   if (modeChanged) {
@@ -607,6 +608,52 @@ async function pollFallback() {
 setInterval(pollFallback, 2000);
 
 connect();
+
+// ── 快照模式 ─────────────────────────────────────────
+let _snapshotMode = false;
+
+const _snapshots = [
+  { btnId: 'btn-snapshot-20260326', data: typeof SNAPSHOT_20260326_03F4 !== 'undefined' ? SNAPSHOT_20260326_03F4 : null },
+];
+
+_snapshots.forEach(({ btnId, data }) => {
+  const btn = document.getElementById(btnId);
+  if (!btn || !data) return;
+
+  btn.addEventListener('click', () => {
+    if (_snapshotMode && btn.classList.contains('active')) {
+      // 再按一次 → 回 live
+      _snapshotMode = false;
+      btn.classList.remove('active');
+      // 恢復工具列狀態文字
+      document.getElementById('last-updated').textContent = '--';
+      document.getElementById('series-code').textContent = '--';
+      // 觸發一次 poll 立刻恢復畫面
+      pollFallback();
+      return;
+    }
+    // 進入快照模式
+    _snapshotMode = true;
+    _snapshots.forEach(s => {
+      const b = document.getElementById(s.btnId);
+      if (b) b.classList.remove('active');
+    });
+    btn.classList.add('active');
+
+    // 顯示快照資料
+    const snap = { ...data };
+    // 覆蓋工具列顯示
+    document.getElementById('last-updated').textContent = data._snapshot_time || '--';
+    document.getElementById('series-code').textContent  = 'TXYN03（快照）';
+
+    // 直接呼叫 updateTable / updateChart（繞過 handleData 以免被 live 模式判斷攔截）
+    _currentSessionMode = 'full';
+    btnFull.classList.add('active');
+    btnDay.classList.remove('active');
+    updateTable(snap.table);
+    updateChart(snap.pnl, true);
+  });
+});
 
 // ── 左側面板拖拉調整寬度 ─────────────────────────────
 const _leftPanel    = document.getElementById('left-panel');

@@ -118,8 +118,13 @@ _XTYP_ADVSTART     = 0x1030     # 0x0030 | XCLASS_BOOL（舊版常數，daqFAP �
 _XTYP_ADVDATA      = 0x4010     # 0x0010 | XCLASS_FLAGS
 _TIMEOUT_ASYNC     = 0xFFFFFFFF  # ADVSTART 必須用非同步模式
 _DDE_FACK          = 0x8000
-_WM_APP_REINIT     = 0x8001     # PostThreadMessageW：觸發重新初始化
-_WM_APP_SUBSCRIBE  = 0x8002     # PostThreadMessageW：訂閱新合約 advise
+_WM_APP_REINIT       = 0x8001   # PostThreadMessageW：觸發重新初始化
+_WM_APP_SUBSCRIBE    = 0x8002   # PostThreadMessageW：訂閱新合約 advise
+_WM_TIMER            = 0x0113   # Windows WM_TIMER
+_WATCHDOG_TIMER_ID   = 1        # SetTimer ID
+_WATCHDOG_INTERVAL   = 30000    # 30 秒觸發一次 WM_TIMER（ms）
+_WATCHDOG_THRESHOLD  = 60.0     # 超過 60 秒無 callback → 重新連線
+_RESUBSCRIBE_COOLDOWN = 120.0   # 重新訂閱最短冷卻時間（秒）
 
 # 64-bit Windows：handle 是 64-bit pointer。
 # restype / argtypes 兩端都必須宣告，否則 ctypes 預設 c_int（32-bit）截斷。
@@ -148,6 +153,10 @@ _user32.DispatchMessageW.argtypes       = [ctypes.c_void_p]
 _user32.PostThreadMessageW.argtypes     = [ctypes.c_ulong, ctypes.c_uint,
                                             ctypes.c_size_t, ctypes.c_size_t]
 _user32.PostThreadMessageW.restype      = ctypes.c_bool
+_user32.SetTimer.argtypes               = [ctypes.c_void_p, ctypes.c_size_t,
+                                            ctypes.c_uint, ctypes.c_void_p]
+_user32.SetTimer.restype                = ctypes.c_size_t
+_user32.KillTimer.argtypes              = [ctypes.c_void_p, ctypes.c_size_t]
 
 
 def _null_cb(a, b, c, d, e, f, g, h):
@@ -181,6 +190,8 @@ def _advise_cb_fn(wType, uFmt, hconv, hsz1, hsz2, hdata, dw1, dw2):
         new_vol = int(float(val_str))
     except (ValueError, TypeError):
         return _DDE_FACK
+    global _last_callback_time
+    _last_callback_time = time.time()
     series = _sym_to_series.get(symbol)
     if series:
         try:
@@ -190,14 +201,16 @@ def _advise_cb_fn(wType, uFmt, hconv, hsz1, hsz2, hdata, dw1, dw2):
     return _DDE_FACK
 
 
-_dde_callback        = _PFNCALLBACK(_advise_cb_fn)
-_ddeml_inst          = _DWORD(0)
-_ddeml_hconv         = None
-_change_queue        = queue.Queue(maxsize=10000)
-_sym_to_series: dict = {}   # full-series symbol → series（e.g. 'TXYN03C33000' → 'TXYN03'）
-_advise_loop_tid     = 0    # Win32 thread ID of advise message loop
+_dde_callback         = _PFNCALLBACK(_advise_cb_fn)
+_ddeml_inst           = _DWORD(0)
+_ddeml_hconv          = None
+_change_queue         = queue.Queue(maxsize=10000)
+_sym_to_series: dict  = {}   # full-series symbol → series（e.g. 'TXYN03C33000' → 'TXYN03'）
+_advise_loop_tid      = 0    # Win32 thread ID of advise message loop
 _pending_subscribe: list = []
-_pending_subscribe_lock  = threading.Lock()
+_pending_subscribe_lock   = threading.Lock()
+_last_callback_time: float = 0.0   # 最後收到 ADVDATA 的時間
+_last_resubscribe_time: float = 0.0  # 最後重新訂閱的時間
 
 
 def _connect_ddeml() -> bool:
@@ -573,11 +586,47 @@ def _advise_worker():
                 _post_feed(day_batch, day_series)
 
 
+def _reconnect_and_resubscribe():
+    """
+    DDEML 重新連線並重訂 advise（watchdog 或 DISCONNECT 觸發）。
+    必須在 advise loop 的主執行緒上呼叫。
+    """
+    global _ddeml_hconv, _last_resubscribe_time
+    now = time.time()
+    if now - _last_resubscribe_time < _RESUBSCRIBE_COOLDOWN:
+        return   # 冷卻中，不重複重連
+    _last_resubscribe_time = now
+
+    logger.warning("[watchdog] 重新連線 DDEML 並重訂 advise...")
+    if _ddeml_hconv:
+        try:
+            _user32.DdeDisconnect(_ddeml_hconv)
+        except Exception:
+            pass
+    hsz_svc   = _user32.DdeCreateStringHandleW(_ddeml_inst.value, "XQFAP", _CP_WINUNICODE)
+    hsz_topic = _user32.DdeCreateStringHandleW(_ddeml_inst.value, "Quote",  _CP_WINUNICODE)
+    hconv = _user32.DdeConnect(_ddeml_inst.value, hsz_svc, hsz_topic, None)
+    _user32.DdeFreeStringHandle(_ddeml_inst.value, hsz_svc)
+    _user32.DdeFreeStringHandle(_ddeml_inst.value, hsz_topic)
+    if not hconv:
+        logger.error("[watchdog] 重新連線失敗，下次 timer 再試")
+        _ddeml_hconv = None
+        return
+    _ddeml_hconv = hconv
+    # 只重訂第一個 full series（負載最小）
+    first_series = next((s for s in _all_metas if 'N' in s), None)
+    if first_series:
+        syms = list(_all_metas[first_series].keys())
+        _advise_subscribe(syms)
+        logger.info(f"[watchdog] 重新訂閱完成（{first_series}，{len(syms)} 個）")
+
+
 def _advise_loop():
     """
     主 advise 迴圈：GetMessageW blocking loop，由 DDEML dispatch advise callback。
     WM_APP_REINIT（0x8001）：重新初始化並重訂 advise。
     WM_APP_SUBSCRIBE（0x8002）：訂閱 _pending_subscribe 中的新合約。
+    WM_TIMER（0x0113）：watchdog，偵測 callback 停止並自動重連。
     """
     global _advise_loop_tid
     _kernel32 = ctypes.WinDLL('kernel32')
@@ -585,10 +634,16 @@ def _advise_loop():
     _advise_loop_tid = _kernel32.GetCurrentThreadId()
     logger.info(f"advise 訊息迴圈啟動（Win32 TID={_advise_loop_tid}）")
 
-    # 訂閱所有已知 full series 合約
-    all_syms = [sym for series, meta in _all_metas.items()
-                if 'N' in series for sym in meta]
-    _advise_subscribe(all_syms)
+    # 只訂閱第一個（最近到期）full series，降低 daqFAP 負載
+    first_series = next((s for s in _all_metas if 'N' in s), None)
+    if first_series:
+        syms = list(_all_metas[first_series].keys())
+        _advise_subscribe(syms)
+    else:
+        logger.error("advise_loop: 找不到任何 full series")
+
+    # 啟動 watchdog timer（每 30 秒觸發 WM_TIMER）
+    _user32.SetTimer(None, _WATCHDOG_TIMER_ID, _WATCHDOG_INTERVAL, None)
 
     msg = ctypes.wintypes.MSG()
     hb_tick = 0
@@ -601,6 +656,13 @@ def _advise_loop():
             logger.error(f"GetMessageW 錯誤 ret={ret}")
             break
 
+        if msg.message == _WM_TIMER:
+            elapsed = time.time() - _last_callback_time
+            if _last_callback_time > 0 and elapsed > _WATCHDOG_THRESHOLD:
+                logger.warning(f"[watchdog] {elapsed:.0f}s 無 ADVDATA，嘗試重新連線")
+                _reconnect_and_resubscribe()
+            continue
+
         if msg.message == _WM_APP_REINIT:
             _reinit_flag.clear()
             logger.info("[排程] advise 迴圈處理 REINIT：重新探索並重訂 advise")
@@ -608,9 +670,10 @@ def _advise_loop():
             _rebuild_sym_to_series()
             for s, m in list(_all_metas.items()):
                 _push_snapshot(m, s)
-            new_syms = [sym for series, meta in _all_metas.items()
-                        if 'N' in series for sym in meta]
-            _advise_subscribe(new_syms)
+            # 只重訂第一個 series
+            first = next((s for s in _all_metas if 'N' in s), None)
+            if first:
+                _advise_subscribe(list(_all_metas[first].keys()))
             continue
 
         if msg.message == _WM_APP_SUBSCRIBE:
@@ -624,9 +687,10 @@ def _advise_loop():
 
         hb_tick += 1
         if hb_tick % 600 == 0:
+            elapsed_since_cb = time.time() - _last_callback_time
             total = sum(len(v) for v in _all_prevs.values())
             logger.info(f"heartbeat: {[f'{s}={len(m)}' for s, m in _all_metas.items()]} "
-                        f"prev_tracked={total}")
+                        f"prev={total} last_cb={elapsed_since_cb:.0f}s ago")
 
         _user32.TranslateMessage(ctypes.byref(msg))
         _user32.DispatchMessageW(ctypes.byref(msg))
