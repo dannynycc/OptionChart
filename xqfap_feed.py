@@ -127,9 +127,10 @@ _WATCHDOG_INTERVAL   = 30000    # 30 秒觸發一次 WM_TIMER（ms）
 _WATCHDOG_THRESHOLD  = 60.0     # 超過 60 秒無 callback → 重新連線
 _RESUBSCRIBE_COOLDOWN = 120.0   # 重新訂閱最短冷卻時間（秒）
 _XTYP_ADVSTOP        = 0x8040   # 0x0040 | XCLASS_NOTIFICATION
-_BG_POLL_INTERVAL    = 60       # 背景系列輪詢間隔（秒）
+_BG_POLL_INTERVAL    = 20       # 背景系列輪詢間隔（秒）
 _SWITCH_LISTENER_PORT = 8001    # main.py 切換系列時的 TCP 通知 port
 _BULK_REQ_THREADS    = 4        # bulk_request_series 並行 DDEML 連線數
+_bulk_req_sem        = threading.Semaphore(1)  # 限制同時只跑 1 個 bulk_req，防止 DDE 競爭
 
 # 64-bit Windows：handle 是 64-bit pointer。
 # restype / argtypes 兩端都必須宣告，否則 ctypes 預設 c_int（32-bit）截斷。
@@ -174,9 +175,8 @@ def _advise_cb_fn(wType, uFmt, hconv, hsz1, hsz2, hdata, dw1, dw2):
     if wType != _XTYP_ADVDATA:
         return 0
     # 取 item 名稱（hsz2 → "TXYN03C33000.TF-TotalVolume"）
-    buf = ctypes.create_string_buffer(256)
-    _user32.DdeQueryStringW(_ddeml_inst.value, hsz2, buf, 256, 1004)   # 1004=CP_WINANSI
-    item_full = buf.value.decode('cp950', errors='replace').strip()
+    _user32.DdeQueryStringW(_ddeml_inst.value, hsz2, _advise_cb_buf, 256, 1004)   # 1004=CP_WINANSI
+    item_full = _advise_cb_buf.value.decode('cp950', errors='replace').strip()
     if '.' not in item_full:
         return _DDE_FACK
     symbol, field = item_full.rsplit('.', 1)
@@ -208,11 +208,12 @@ def _advise_cb_fn(wType, uFmt, hconv, hsz1, hsz2, hdata, dw1, dw2):
 
 _dde_callback         = _PFNCALLBACK(_advise_cb_fn)
 _ddeml_inst           = _DWORD(0)
+_advise_cb_buf        = ctypes.create_string_buffer(256)  # 重複使用，避免高頻 callback 配置
 _ddeml_hconv          = None
 _change_queue         = queue.Queue(maxsize=10000)
 _sym_to_series: dict  = {}   # full-series symbol → series（e.g. 'TXYN03C33000' → 'TXYN03'）
 _advise_loop_tid      = 0    # Win32 thread ID of advise message loop
-_pending_subscribe: list = []
+_pending_subscribe: set = set()  # 用 set 去重，避免重複 ADVSTART
 _pending_subscribe_lock   = threading.Lock()
 _last_callback_time: float = 0.0   # 最後收到 ADVDATA 的時間
 _last_resubscribe_time: float = 0.0  # 最後重新訂閱的時間
@@ -261,12 +262,14 @@ def _req_ddeml(item: str) -> str:
         _user32.DdeFreeStringHandle(_ddeml_inst.value, hsz_item)
         if not hdata:
             return ''
-        sz  = _user32.DdeGetData(hdata, None, 0, 0)
-        buf = ctypes.create_string_buffer(sz) if sz > 0 else ctypes.create_string_buffer(1)
-        _user32.DdeGetData(hdata, buf, sz, 0)
-        _user32.DdeFreeDataHandle(hdata)
-        val = buf.raw.rstrip(b'\x00').decode('cp950', errors='replace').strip()
-        return '' if val == '-' else val
+        try:
+            sz  = _user32.DdeGetData(hdata, None, 0, 0)
+            buf = ctypes.create_string_buffer(sz) if sz > 0 else ctypes.create_string_buffer(1)
+            _user32.DdeGetData(hdata, buf, sz, 0)
+            val = buf.raw.rstrip(b'\x00').decode('cp950', errors='replace').strip()
+            return '' if val == '-' else val
+        finally:
+            _user32.DdeFreeDataHandle(hdata)
     except Exception:
         return ''
 
@@ -348,7 +351,12 @@ def _req_thread(item: str) -> str:
         )
         _user32.DdeFreeStringHandle(inst.value, hsz)
         if not hdata:
-            _thread_local.hconv = None   # 連線可能已斷，下次觸發重連
+            # 連線已斷，先 DdeDisconnect 再重連
+            try:
+                _user32.DdeDisconnect(hconv)
+            except Exception:
+                pass
+            _thread_local.hconv = None
             return ''
         sz  = _user32.DdeGetData(hdata, None, 0, 0)
         buf = ctypes.create_string_buffer(sz) if sz > 0 else ctypes.create_string_buffer(1)
@@ -357,6 +365,13 @@ def _req_thread(item: str) -> str:
         val = buf.raw.rstrip(b'\x00').decode('cp950', errors='replace').strip()
         return '' if val in ('-', '') else val.rstrip('%')
     except Exception:
+        # 例外路徑：同樣先 disconnect 再清除
+        hconv = getattr(_thread_local, 'hconv', None)
+        if hconv:
+            try:
+                _user32.DdeDisconnect(hconv)
+            except Exception:
+                pass
         _thread_local.hconv = None
         return ''
 
@@ -450,20 +465,20 @@ def _post_feed(batch: list, series: str):
 # ── 初始快照 ──────────────────────────────────────────────────
 
 def _push_snapshot(meta: dict, series: str):
+    """初始快照：只查 TotalVolume + InOutRatio（各 1 次 pywin32），跳過 Name 驗證和 AvgPrice。
+    avg_price=0，bg_poll 第一輪（~60s）會用 DDEML 補上正確值。"""
+    logger.info(f"開始 push_snapshot [{series}]：{len(meta)} 筆")
     snapshot = []
     for symbol in meta:
-        data = _get_fields(symbol)
-        if data is None:
-            continue
         snapshot.append({
             'symbol':       symbol,
-            'trade_volume': int(data['total_volume']),
-            'inout_ratio':  data['inout_ratio'],
-            'avg_price':    data['avg_price'],
+            'trade_volume': int(_to_float(_req(f"{symbol}.TF-TotalVolume")) or 0),
+            'inout_ratio':  _to_float(_req(f"{symbol}.TF-InOutRatio")),
+            'avg_price':    0.0,
         })
     if snapshot:
         _post_feed(snapshot, series=series)
-        logger.info(f"初始快照推送 [{series}]：{len(snapshot)} 筆")
+        logger.info(f"初始快照推送完成 [{series}]：{len(snapshot)} 筆")
 
 
 # ── 追蹤狀態 ─────────────────────────────────────────────────
@@ -498,7 +513,7 @@ def _load_one_series(center: int, full_series: str, sd_str: str):
     logger.info(f"載入完成：{full_series} / {day_series}")
     # 通知 advise 迴圈訂閱新系列
     with _pending_subscribe_lock:
-        _pending_subscribe.extend(list(meta_full.keys()))
+        _pending_subscribe.update(meta_full.keys())
     if _advise_loop_tid:
         _user32.PostThreadMessageW(_advise_loop_tid, _WM_APP_SUBSCRIBE, 0, 0)
     _post_contracts(_all_valid_series)
@@ -526,11 +541,13 @@ def _advise_subscribe(symbols: list):
     for sym in symbols:
         item_str = f"{sym}.TF-TotalVolume"
         hsz = _user32.DdeCreateStringHandleW(_ddeml_inst.value, item_str, _CP_WINUNICODE)
-        hdata = _user32.DdeClientTransaction(
-            None, 0, _ddeml_hconv, hsz,
-            _CF_TEXT, _XTYP_ADVSTART, _TIMEOUT_ASYNC, None,
-        )
-        _user32.DdeFreeStringHandle(_ddeml_inst.value, hsz)
+        try:
+            hdata = _user32.DdeClientTransaction(
+                None, 0, _ddeml_hconv, hsz,
+                _CF_TEXT, _XTYP_ADVSTART, _TIMEOUT_ASYNC, None,
+            )
+        finally:
+            _user32.DdeFreeStringHandle(_ddeml_inst.value, hsz)
         if hdata:
             _user32.DdeFreeDataHandle(hdata)
             ok += 1
@@ -546,12 +563,14 @@ def _advise_unsubscribe(symbols: list):
     for sym in symbols:
         item_str = f"{sym}.TF-TotalVolume"
         hsz = _user32.DdeCreateStringHandleW(_ddeml_inst.value, item_str, _CP_WINUNICODE)
-        dr = ctypes.c_ulong(0)
-        _user32.DdeClientTransaction(
-            None, 0, _ddeml_hconv, hsz,
-            _CF_TEXT, _XTYP_ADVSTOP, 5000, ctypes.byref(dr),
-        )
-        _user32.DdeFreeStringHandle(_ddeml_inst.value, hsz)
+        try:
+            dr = ctypes.c_ulong(0)
+            _user32.DdeClientTransaction(
+                None, 0, _ddeml_hconv, hsz,
+                _CF_TEXT, _XTYP_ADVSTOP, 5000, ctypes.byref(dr),
+            )
+        finally:
+            _user32.DdeFreeStringHandle(_ddeml_inst.value, hsz)
     logger.info(f"ADVSTOP：{len(symbols)} 個合約取消訂閱")
 
 
@@ -632,7 +651,9 @@ def _bulk_request_series(full_series: str):
     Worker thread：對 full_series 及其對應 day_series 的所有合約做一次全量 REQUEST，
     更新 _all_prevs 並 POST 到 FastAPI。切換 active series 後呼叫，補上錯過的資料。
     _BULK_REQ_THREADS 條並行 DDEML 連線（各 thread-local），縮短等待時間。
+    _bulk_req_sem 確保同時只有 1 個 bulk_req 執行，避免多系列並行競爭 DDE 資源。
     """
+    _bulk_req_sem.acquire()
     t0         = time.time()
     day_series = full_series.replace('N', '')
     full_meta  = _all_metas.get(full_series, {})
@@ -650,37 +671,53 @@ def _bulk_request_series(full_series: str):
     def _worker(chunk: list):
         local_full: list = []
         local_day:  list = []
-        for full_sym in chunk:
-            day_sym = full_sym.replace(full_series, day_series, 1)
+        try:
+            for full_sym in chunk:
+                day_sym = full_sym.replace(full_series, day_series, 1)
 
-            # 全日盤
-            vol_str   = _req_thread(f"{full_sym}.TF-TotalVolume")
-            ratio_str = _req_thread(f"{full_sym}.TF-InOutRatio")
-            avg_str   = _req_thread(f"{full_sym}.TF-AvgPrice")
-            new_vol   = int(float(vol_str)) if vol_str else 0
-            new_ratio = _to_float(ratio_str)
-            new_avg   = _to_float(avg_str)
-            if new_vol > 0 or new_ratio > 0:
+                # 全日盤
+                vol_str   = _req_thread(f"{full_sym}.TF-TotalVolume")
+                ratio_str = _req_thread(f"{full_sym}.TF-InOutRatio")
+                avg_str   = _req_thread(f"{full_sym}.TF-AvgPrice")
+                new_vol   = int(float(vol_str)) if vol_str else 0
+                new_ratio = _to_float(ratio_str)
+                new_avg   = _to_float(avg_str)
+                # bg_poll 永遠送出，即使 vol=0，讓 main.py 更新 last_updated（盤後心跳用）
                 local_full.append({'symbol': full_sym, 'trade_volume': new_vol,
                                    'inout_ratio': new_ratio, 'avg_price': new_avg,
                                    '_ratio': new_ratio, '_vol': new_vol})
 
-            # 日盤（獨立 REQUEST，非改名）
-            if has_day:
-                d_vol_str   = _req_thread(f"{day_sym}.TF-TotalVolume")
-                d_ratio_str = _req_thread(f"{day_sym}.TF-InOutRatio")
-                d_avg_str   = _req_thread(f"{day_sym}.TF-AvgPrice")
-                d_vol   = int(float(d_vol_str)) if d_vol_str else 0
-                d_ratio = _to_float(d_ratio_str)
-                d_avg   = _to_float(d_avg_str)
-                if d_vol > 0 or d_ratio > 0:
+                # 日盤（獨立 REQUEST，非改名）
+                if has_day:
+                    d_vol_str   = _req_thread(f"{day_sym}.TF-TotalVolume")
+                    d_ratio_str = _req_thread(f"{day_sym}.TF-InOutRatio")
+                    d_avg_str   = _req_thread(f"{day_sym}.TF-AvgPrice")
+                    d_vol   = int(float(d_vol_str)) if d_vol_str else 0
+                    d_ratio = _to_float(d_ratio_str)
+                    d_avg   = _to_float(d_avg_str)
                     local_day.append({'symbol': day_sym, 'trade_volume': d_vol,
                                       'inout_ratio': d_ratio, 'avg_price': d_avg,
                                       '_day_sym': day_sym, '_ratio': d_ratio, '_vol': d_vol})
 
-        with merge_lock:
-            full_results.extend(local_full)
-            day_results.extend(local_day)
+            with merge_lock:
+                full_results.extend(local_full)
+                day_results.extend(local_day)
+        finally:
+            # 釋放 thread-local DDEML 連線（Windows 系統資源，GC 無法自動回收）
+            hconv = getattr(_thread_local, 'hconv', None)
+            inst  = getattr(_thread_local, 'inst',  None)
+            if hconv:
+                try:
+                    _user32.DdeDisconnect(hconv)
+                except Exception:
+                    pass
+            if inst:
+                try:
+                    _user32.DdeUninitialize(inst.value)
+                except Exception:
+                    pass
+            _thread_local.hconv = None
+            _thread_local.inst  = None
 
     threads = [threading.Thread(target=_worker, args=(chunk,), daemon=True)
                for chunk in chunks]
@@ -706,13 +743,16 @@ def _bulk_request_series(full_series: str):
                   for r in day_results]
 
     elapsed = time.time() - t0
-    if full_batch:
-        _post_feed(full_batch, full_series)
-        logger.info(f"[bulk_req] {full_series} 刷新 {len(full_batch)} 筆"
-                    f"（{n_threads} threads，{elapsed:.1f}s）")
-    if day_batch:
-        _post_feed(day_batch, day_series)
-        logger.info(f"[bulk_req] {day_series} 刷新 {len(day_batch)} 筆")
+    try:
+        if full_batch:
+            _post_feed(full_batch, full_series)
+            logger.info(f"[bulk_req] {full_series} 刷新 {len(full_batch)} 筆"
+                        f"（{n_threads} threads，{elapsed:.1f}s）")
+        if day_batch:
+            _post_feed(day_batch, day_series)
+            logger.info(f"[bulk_req] {day_series} 刷新 {len(day_batch)} 筆")
+    finally:
+        _bulk_req_sem.release()
 
 
 def _switch_active_series(new_full_series: str):
@@ -768,6 +808,7 @@ def _switch_listener():
         srv.bind(('127.0.0.1', _SWITCH_LISTENER_PORT))
     except OSError as e:
         logger.warning(f"[switch_listener] bind 失敗：{e}，fallback 到輪詢")
+        srv.close()
         return
     srv.listen(8)
     logger.info(f"[switch_listener] 監聽 127.0.0.1:{_SWITCH_LISTENER_PORT}")
@@ -986,7 +1027,16 @@ def _reinit():
         new_prevs[day_series]  = {}
     _all_metas = new_metas
     _all_prevs = new_prevs
+    # 清除 _series_sd 中已不在追蹤清單的廢棄系列（與 _all_metas 保持同步）
+    for stale in [k for k in list(_series_sd.keys()) if k not in new_metas]:
+        del _series_sd[stale]
     logger.info(f"重新初始化完成：{list(_all_metas.keys())}")
+    # 通知 main.py 清除已不在追蹤清單的廢棄系列（避免 stores 無限累積）
+    try:
+        requests.post(f"{SERVER_URL}/api/purge-series",
+                      json={'keep': list(new_metas.keys())}, timeout=5)
+    except Exception as e:
+        logger.warning(f"purge-series 失敗：{e}")
 
 
 def _auto_reinit_scheduler():
@@ -1308,7 +1358,7 @@ def main():
     # 啟動時一次性探索所有系列（advise 需要在 loop 啟動前知道全部合約）
     _all_metas = {}
     _all_prevs = {}
-    for full_series, sd_str in series_with_sd:
+    for i, (full_series, sd_str) in enumerate(series_with_sd):
         _series_sd[full_series] = sd_str
         contracts_full, meta_full = _discover_contracts(center, full_series)
         if not contracts_full:
@@ -1322,8 +1372,11 @@ def main():
         _all_prevs[day_series]  = {}
         _post_init(contracts_full, full_series, sd_str)
         _post_init(contracts_day,  day_series,  sd_str)
-        _push_snapshot(meta_full, full_series)
-        _push_snapshot(meta_day,  day_series)
+        if i == 0:  # 只對 active series 做初始快照；其餘由 bg_poll 第一輪更新
+            _push_snapshot(meta_full, full_series)
+            _push_snapshot(meta_day,  day_series)
+        else:
+            logger.info(f"跳過 push_snapshot [{full_series}]，bg_poll 將補上")
         _post_contracts(_all_valid_series)
 
     if not _all_metas:

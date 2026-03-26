@@ -38,6 +38,7 @@ _connected:        bool  = False
 _session_mode:     str   = "full"
 
 clients: set[WebSocket] = set()
+_ws_connect_count: int = 0   # 累計 WS 連線次數（刷新頁面會 +1）
 
 # ── 計算 payload ──────────────────────────────────────────────
 
@@ -282,6 +283,27 @@ async def api_set_series(payload: SeriesPayload):
         await broadcast(compute_payload())
     return {"ok": True}
 
+# ── 廢棄系列清理端點 ──────────────────────────────────────────
+
+class PurgeSeriesPayload(BaseModel):
+    keep: list[str]   # 目前仍有效的系列清單，不在此清單的系列將從 stores 移除
+
+@app.post("/api/purge-series")
+async def api_purge_series(payload: PurgeSeriesPayload):
+    """xqfap_feed reinit 完成後呼叫，清除 stores 中已過期的舊系列"""
+    keep_set = set(payload.keep)
+    stale = [s for s in list(stores.keys()) if s not in keep_set]
+    if not stale:
+        return {"ok": True, "removed": []}
+    with _lock:
+        for s in stale:
+            stores.pop(s, None)
+            _settlement_dates.pop(s, None)
+            _subscribed_counts.pop(s, None)
+            _last_updated.pop(s, None)
+    logger.info(f"purge-series：移除廢棄系列 {stale}，保留 {list(keep_set)}")
+    return {"ok": True, "removed": stale}
+
 # ── 合約下拉清單端點 ──────────────────────────────────────────
 
 class ContractsPayload(BaseModel):
@@ -311,6 +333,22 @@ async def api_contracts_get():
 
 # ── 一般 HTTP 端點 ────────────────────────────────────────────
 
+@app.get("/api/debug")
+async def api_debug():
+    """記憶體/資源監控端點：回傳 stores 大小、clients 數、asyncio tasks 數"""
+    import asyncio, threading
+    stores_info = {s: len(v) for s, v in stores.items()}
+    tasks = [t for t in asyncio.all_tasks() if not t.done()]
+    return {
+        "stores":           stores_info,
+        "stores_total":     sum(stores_info.values()),
+        "clients":          len(clients),
+        "asyncio_tasks":    len(tasks),
+        "threads":          threading.active_count(),
+        "last_updated":     dict(_last_updated),
+        "ws_connect_count": _ws_connect_count,
+    }
+
 @app.get("/")
 async def index():
     return FileResponse("static/index.html")
@@ -334,9 +372,11 @@ async def get_status():
 
 @app.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket):
+    global _ws_connect_count
     await ws.accept()
     clients.add(ws)
-    logger.info(f"瀏覽器連線，目前 {len(clients)} 個用戶")
+    _ws_connect_count += 1
+    logger.info(f"瀏覽器連線，目前 {len(clients)} 個用戶（累計第 {_ws_connect_count} 次）")
     try:
         await ws.send_text(json.dumps(compute_payload(), ensure_ascii=False, default=str))
     except Exception:
