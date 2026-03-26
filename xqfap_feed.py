@@ -128,6 +128,7 @@ _WATCHDOG_THRESHOLD  = 60.0     # 超過 60 秒無 callback → 重新連線
 _RESUBSCRIBE_COOLDOWN = 120.0   # 重新訂閱最短冷卻時間（秒）
 _XTYP_ADVSTOP        = 0x8040   # 0x0040 | XCLASS_NOTIFICATION
 _BG_POLL_INTERVAL    = 60       # 背景系列輪詢間隔（秒）
+_SWITCH_LISTENER_PORT = 8001    # main.py 切換系列時的 TCP 通知 port
 
 # 64-bit Windows：handle 是 64-bit pointer。
 # restype / argtypes 兩端都必須宣告，否則 ctypes 預設 c_int（32-bit）截斷。
@@ -703,10 +704,49 @@ def _switch_active_series(new_full_series: str):
         logger.warning(f"[switch] {new_full_series} 尚未載入，無法切換")
 
 
+def _trigger_switch(new_full: str):
+    """從任何 thread 觸發 series 切換：設 pending + PostThreadMessageW。"""
+    global _pending_switch_series
+    if (new_full and new_full in _all_metas
+            and new_full != _active_advise_series):
+        with _pending_switch_lock:
+            _pending_switch_series = new_full
+        if _advise_loop_tid:
+            _user32.PostThreadMessageW(
+                _advise_loop_tid, _WM_APP_SWITCH, 0, 0)
+
+
+def _switch_listener():
+    """
+    TCP socket listener（port 8001）：接收 main.py 的即時切換通知。
+    main.py 呼叫 /api/set-series 時直接 connect 並送 series 名稱，
+    省去 _series_watcher 的 2s 輪詢延遲。
+    """
+    import socket as _socket
+    srv = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+    srv.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 1)
+    try:
+        srv.bind(('127.0.0.1', _SWITCH_LISTENER_PORT))
+    except OSError as e:
+        logger.warning(f"[switch_listener] bind 失敗：{e}，fallback 到輪詢")
+        return
+    srv.listen(8)
+    logger.info(f"[switch_listener] 監聽 127.0.0.1:{_SWITCH_LISTENER_PORT}")
+    while True:
+        try:
+            conn, _ = srv.accept()
+            data = conn.recv(64).decode('utf-8', errors='replace').strip()
+            conn.close()
+            if data:
+                _trigger_switch(data)
+        except Exception:
+            pass
+
+
 def _series_watcher():
     """
-    背景 thread：每 2s 輪詢 main.py /api/active-series，
-    偵測前端切換合約，透過 PostThreadMessageW 通知 advise loop。
+    背景 fallback：每 10s 輪詢 /api/active-series，補抓 socket 通知遺漏的切換。
+    主要切換路徑已改為 _switch_listener（即時觸發）。
     """
     global _pending_switch_series
     last_seen = ''
@@ -715,20 +755,14 @@ def _series_watcher():
             resp = requests.get(f"{SERVER_URL}/api/active-series", timeout=3)
             if resp.ok:
                 new_full = resp.json().get('full', '')
-                if (new_full and new_full != last_seen
-                        and new_full in _all_metas
-                        and new_full != _active_advise_series):
-                    with _pending_switch_lock:
-                        _pending_switch_series = new_full
-                    if _advise_loop_tid:
-                        _user32.PostThreadMessageW(
-                            _advise_loop_tid, _WM_APP_SWITCH, 0, 0)
-                    last_seen = new_full
-                elif new_full:
+                if new_full:
+                    if (new_full != last_seen
+                            and new_full != _active_advise_series):
+                        _trigger_switch(new_full)
                     last_seen = new_full
         except Exception:
             pass
-        time.sleep(2)
+        time.sleep(10)
 
 
 def _bg_poll_one_series(full_series: str, offset: float):
@@ -1260,6 +1294,7 @@ def main():
 
     threading.Thread(target=_auto_reinit_scheduler, daemon=True).start()
     threading.Thread(target=_advise_worker, daemon=True).start()
+    threading.Thread(target=_switch_listener, daemon=True).start()
     threading.Thread(target=_series_watcher, daemon=True).start()
 
     # 背景輪詢：每個 full series 一條 thread，錯開時間

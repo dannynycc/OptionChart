@@ -9,6 +9,7 @@ import time
 import logging
 import asyncio
 import threading
+import socket
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
@@ -256,6 +257,15 @@ class SeriesPayload(BaseModel):
     series_full: str   # e.g. "TX4N03"
     series_day:  str   # e.g. "TX403"
 
+def _notify_feeder(series_full: str):
+    """通知 xqfap_feed.py 立即切換系列（TCP socket，port 8001）。"""
+    try:
+        with socket.create_connection(('127.0.0.1', 8001), timeout=0.5) as s:
+            s.sendall(series_full.encode('utf-8'))
+    except Exception:
+        pass  # feeder 未啟動或 socket 失敗，_series_watcher fallback 會補上
+
+
 @app.post("/api/set-series")
 async def api_set_series(payload: SeriesPayload):
     global _active_full, _active_day
@@ -266,6 +276,7 @@ async def api_set_series(payload: SeriesPayload):
     _active_full = payload.series_full
     _active_day  = payload.series_day
     logger.info(f"active series → full={_active_full}, day={_active_day}")
+    threading.Thread(target=_notify_feeder, args=(payload.series_full,), daemon=True).start()
     if clients:
         await broadcast(compute_payload())
     return {"ok": True}
