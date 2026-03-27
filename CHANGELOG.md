@@ -1,5 +1,17 @@
 # Changelog
 
+## v3.4 (2026-03-27)
+
+### T字表 hover 閃爍修正 & 細節
+
+- **修正 hover row 每秒閃爍**：`updateTable` 改為原地更新（in-place update），保留 row DOM 節點（`body._rowMap`），不再每次清空重建。`:hover` 狀態不中斷，閃爍消除
+- **Flash 動畫重觸發**：原地更新時以 `classList.remove → void offsetWidth → classList.add` 強制 reflow，確保資料真正變化時動畫正確重啟
+- **資料時間格式**：加入秒數，改為 `YYYY-MM-DD HH:MM:SS`
+
+**變更檔案**：`static/app.js`
+
+---
+
 ## v3.3 (2026-03-27)
 
 ### UI 細節調整

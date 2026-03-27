@@ -350,6 +350,15 @@ function _cell(cls, text, flash) {
   d.textContent = text;
   return d;
 }
+function _updateCell(el, cls, text, flash) {
+  if (el.className !== cls) el.className = cls;
+  if (el.textContent !== text) el.textContent = text;
+  if (flash) {
+    el.classList.remove('flash');
+    void el.offsetWidth;  // 強制 reflow，讓瀏覽器記錄「無 flash」狀態再加回
+    el.classList.add('flash');
+  }
+}
 function _barCell(wrapCls, barCls, pct) {
   const w = document.createElement('div');
   w.className = wrapCls + ' bar-wrapper';
@@ -377,7 +386,9 @@ function updateTable(rows) {
   maxAbsNet = newMax;
 
   const body = document.getElementById('strike-table-body');
-  body.textContent = '';   // 清空（比 innerHTML='' 更安全）
+  if (!body._rowMap) body._rowMap = {};
+
+  const seenKeys = new Set();
 
   for (const r of rows) {
     const nc  = gC(r, 'net_call'),   np  = gC(r, 'net_put');
@@ -386,50 +397,81 @@ function updateTable(rows) {
     const ac  = gC(r, 'ask_match_call'), bc = gC(r, 'bid_match_call');
     const ap  = gC(r, 'ask_match_put'),  bp = gC(r, 'bid_match_put');
 
-    // 淨Put 顯示值 = 外盤(Buy Put) − 內盤(Sell Put) = bp − ap = np
     const displayedNp = np;
-
-    // pct 最大 50%，配合 bar 從中心（right/left:50%）延伸
-    const callPct = (Math.abs(nc)         / maxAbsNet * 50).toFixed(1);
+    const callPct = (Math.abs(nc)          / maxAbsNet * 50).toFixed(1);
     const putPct  = (Math.abs(displayedNp) / maxAbsNet * 50).toFixed(1);
 
     const key = r.strike + sfx;
+    seenKeys.add(key);
+
     const prev = prevValues[key] || {};
     const ch = (v, k) => prev[k] !== v;
     prevValues[key] = { nc, vc, rc_, avg_c: r.avg_price_call, ac, bc,
                         np, vp, rp_, avg_p: r.avg_price_put,  ap, bp };
 
-    // 淨Call 正→紅/負→綠；淨Put 正→綠/負→紅
-    const ncCls = nc         > 0 ? ' val-pos' : nc         < 0 ? ' val-neg' : '';
-    const npCls = displayedNp > 0 ? ' val-pos' : displayedNp < 0 ? ' val-neg' : '';
+    const ncCls = 'col-call-val' + (nc > 0 ? ' val-pos' : nc < 0 ? ' val-neg' : '');
+    const npCls = 'col-put-val'  + (displayedNp > 0 ? ' val-pos' : displayedNp < 0 ? ' val-neg' : '');
 
-    const row = document.createElement('div');
-    row.className = 'row' + (r.highlight ? ' highlight' : '');
+    const existing = body._rowMap[key];
+    if (existing) {
+      // ── 原地更新：保留 row DOM 節點，hover 狀態不中斷 ──
+      existing.className = 'row' + (r.highlight ? ' highlight' : '');
+      const c = existing._cells;
+      _updateCell(c.call_sell,  'col-call-sell',  bc > 0 ? String(bc) : '',                          ch(bc,  'bc'));
+      _updateCell(c.call_buy,   'col-call-buy',   ac > 0 ? String(ac) : '',                          ch(ac,  'ac'));
+      _updateCell(c.call_vol,   'col-call-vol',   vc > 0 ? String(vc) : '',                          ch(vc,  'vc'));
+      _updateCell(c.call_ratio, 'col-call-ratio', vc > 0 ? rc_.toFixed(2) : '',                      ch(rc_, 'rc_'));
+      _updateCell(c.call_avg,   'col-call-avg',   r.avg_price_call > 0 ? r.avg_price_call.toFixed(1) : '', ch(r.avg_price_call, 'avg_c'));
+      _updateCell(c.call_val,   ncCls,            nc !== 0 ? nc.toFixed(0) : '',                     ch(nc,  'nc'));
+      c.call_bar.firstChild.className = 'bar-call ' + (nc >= 0 ? 'positive' : 'negative');
+      c.call_bar.firstChild.style.width = callPct + '%';
+      c.put_bar.firstChild.className  = 'bar-put '  + (displayedNp >= 0 ? 'positive' : 'negative');
+      c.put_bar.firstChild.style.width = putPct + '%';
+      _updateCell(c.put_val,    npCls,            displayedNp !== 0 ? displayedNp.toFixed(0) : '',   ch(np,  'np'));
+      _updateCell(c.put_sell,   'col-put-sell',   bp > 0 ? String(bp) : '',                          ch(bp,  'bp'));
+      _updateCell(c.put_buy,    'col-put-buy',    ap > 0 ? String(ap) : '',                          ch(ap,  'ap'));
+      _updateCell(c.put_vol,    'col-put-vol',    vp > 0 ? String(vp) : '',                          ch(vp,  'vp'));
+      _updateCell(c.put_ratio,  'col-put-ratio',  vp > 0 ? rp_.toFixed(2) : '',                      ch(rp_, 'rp_'));
+      _updateCell(c.put_avg,    'col-put-avg',    r.avg_price_put > 0 ? r.avg_price_put.toFixed(1) : '', ch(r.avg_price_put, 'avg_p'));
+      c.pnl_call.textContent     = r.pnl_call     != null ? r.pnl_call.toFixed(4)     : '';
+      c.pnl_put.textContent      = r.pnl_put      != null ? r.pnl_put.toFixed(4)      : '';
+      c.pnl_combined.textContent = r.pnl_combined != null ? r.pnl_combined.toFixed(4) : '';
+    } else {
+      // ── 首次建立 row ──
+      const row = document.createElement('div');
+      row.className = 'row' + (r.highlight ? ' highlight' : '');
+      const c = {};
+      c.call_sell  = _cell('col-call-sell',  bc > 0 ? String(bc) : '',                          ch(bc,  'bc')  ? ' flash' : '');
+      c.call_buy   = _cell('col-call-buy',   ac > 0 ? String(ac) : '',                          ch(ac,  'ac')  ? ' flash' : '');
+      c.call_vol   = _cell('col-call-vol',   vc > 0 ? String(vc) : '',                          ch(vc,  'vc')  ? ' flash' : '');
+      c.call_ratio = _cell('col-call-ratio', vc > 0 ? rc_.toFixed(2) : '',                      ch(rc_, 'rc_') ? ' flash' : '');
+      c.call_avg   = _cell('col-call-avg',   r.avg_price_call > 0 ? r.avg_price_call.toFixed(1) : '', ch(r.avg_price_call, 'avg_c') ? ' flash' : '');
+      c.call_val   = _cell(ncCls,            nc !== 0 ? nc.toFixed(0) : '',                     ch(nc,  'nc')  ? ' flash' : '');
+      c.call_bar   = _barCell('col-call-bar', 'bar-call ' + (nc >= 0 ? 'positive' : 'negative'), callPct);
+      c.strike     = _cell('col-strike',     String(r.strike), '');
+      c.put_bar    = _barCell('col-put-bar',  'bar-put '  + (displayedNp >= 0 ? 'positive' : 'negative'), putPct);
+      c.put_val    = _cell(npCls,            displayedNp !== 0 ? displayedNp.toFixed(0) : '',   ch(np,  'np')  ? ' flash' : '');
+      c.put_sell   = _cell('col-put-sell',   bp > 0 ? String(bp) : '',                          ch(bp,  'bp')  ? ' flash' : '');
+      c.put_buy    = _cell('col-put-buy',    ap > 0 ? String(ap) : '',                          ch(ap,  'ap')  ? ' flash' : '');
+      c.put_vol    = _cell('col-put-vol',    vp > 0 ? String(vp) : '',                          ch(vp,  'vp')  ? ' flash' : '');
+      c.put_ratio  = _cell('col-put-ratio',  vp > 0 ? rp_.toFixed(2) : '',                      ch(rp_, 'rp_') ? ' flash' : '');
+      c.put_avg    = _cell('col-put-avg',    r.avg_price_put > 0 ? r.avg_price_put.toFixed(1) : '', ch(r.avg_price_put, 'avg_p') ? ' flash' : '');
+      c.pnl_call    = _cell('col-pnl-call',     r.pnl_call     != null ? r.pnl_call.toFixed(4)     : '', '');
+      c.pnl_put     = _cell('col-pnl-put',      r.pnl_put      != null ? r.pnl_put.toFixed(4)      : '', '');
+      c.pnl_combined = _cell('col-pnl-combined', r.pnl_combined != null ? r.pnl_combined.toFixed(4) : '', '');
+      for (const cell of Object.values(c)) row.appendChild(cell);
+      row._cells = c;
+      body._rowMap[key] = row;
+      body.appendChild(row);
+    }
+  }
 
-    // CALL side（左→右）：外盤成交量(Buy Call) | 內盤成交量(Sell Call) | 總成交量 | 內外盤% | 成交均價 | 淨Call | bar
-    // col-call-sell → 外盤(Buy Call) = bid_match(bc)；col-call-buy → 內盤(Sell Call) = ask_match(ac)
-    row.appendChild(_cell('col-call-sell',  bc > 0 ? String(bc) : '',                     ch(bc,  'bc')   ? ' flash' : ''));
-    row.appendChild(_cell('col-call-buy',   ac > 0 ? String(ac) : '',                     ch(ac,  'ac')   ? ' flash' : ''));
-    row.appendChild(_cell('col-call-vol',   vc > 0 ? String(vc) : '',                     ch(vc,  'vc')   ? ' flash' : ''));
-    row.appendChild(_cell('col-call-ratio', vc > 0 ? rc_.toFixed(2) : '',                 ch(rc_, 'rc_')  ? ' flash' : ''));
-    row.appendChild(_cell('col-call-avg',   r.avg_price_call > 0 ? r.avg_price_call.toFixed(1) : '', ch(r.avg_price_call, 'avg_c') ? ' flash' : ''));
-    row.appendChild(_cell('col-call-val' + ncCls, nc !== 0 ? nc.toFixed(0) : '',          ch(nc,  'nc')   ? ' flash' : ''));
-    row.appendChild(_barCell('col-call-bar', 'bar-call ' + (nc >= 0 ? 'positive' : 'negative'), callPct));
-    row.appendChild(_cell('col-strike',     String(r.strike),                              ''));
-    // PUT side（左→右）：bar | 淨Put | 外盤成交量(Buy Put) | 內盤成交量(Sell Put) | 總成交量 | 內外盤% | 成交均價
-    // col-put-sell → 外盤(Buy Put) = bid_match(bp)；col-put-buy → 內盤(Sell Put) = ask_match(ap)
-    row.appendChild(_barCell('col-put-bar', 'bar-put ' + (displayedNp >= 0 ? 'positive' : 'negative'), putPct));
-    row.appendChild(_cell('col-put-val' + npCls, displayedNp !== 0 ? displayedNp.toFixed(0) : '', ch(np, 'np') ? ' flash' : ''));
-    row.appendChild(_cell('col-put-sell',   bp > 0 ? String(bp) : '',                     ch(bp,  'bp')   ? ' flash' : ''));
-    row.appendChild(_cell('col-put-buy',    ap > 0 ? String(ap) : '',                     ch(ap,  'ap')   ? ' flash' : ''));
-    row.appendChild(_cell('col-put-vol',    vp > 0 ? String(vp) : '',                     ch(vp,  'vp')   ? ' flash' : ''));
-    row.appendChild(_cell('col-put-ratio',  vp > 0 ? rp_.toFixed(2) : '',                 ch(rp_, 'rp_')  ? ' flash' : ''));
-    row.appendChild(_cell('col-put-avg',    r.avg_price_put > 0 ? r.avg_price_put.toFixed(1) : '',  ch(r.avg_price_put, 'avg_p') ? ' flash' : ''));
-    row.appendChild(_cell('col-pnl-call',     r.pnl_call     != null ? r.pnl_call.toFixed(4)     : '', ''));
-    row.appendChild(_cell('col-pnl-put',      r.pnl_put      != null ? r.pnl_put.toFixed(4)      : '', ''));
-    row.appendChild(_cell('col-pnl-combined', r.pnl_combined != null ? r.pnl_combined.toFixed(4) : '', ''));
-
-    body.appendChild(row);
+  // 移除不再存在的履約價 row
+  for (const key of Object.keys(body._rowMap)) {
+    if (!seenKeys.has(key)) {
+      body._rowMap[key].remove();
+      delete body._rowMap[key];
+    }
   }
 
   // 自動捲動到高亮列
@@ -445,7 +487,9 @@ let _viewingNonLive   = false;  // 用戶正在查看尚未 ready 的系列
 let _viewingNonLiveIdx = -1;    // 對應 _contractsData 的 index
 
 function _clearDisplay() {
-  document.getElementById('strike-table-body').textContent = '';
+  const tb = document.getElementById('strike-table-body');
+  tb.textContent = '';
+  tb._rowMap = {};
   _chartStrikes = [];
   _chartPnl     = [];
   const statsEl = document.getElementById('pnl-stats');
@@ -598,7 +642,7 @@ function updateStatus(status, settlement) {
       _serverLastUpdated = status.last_updated;
       const d = new Date(status.last_updated * 1000);
       const pad = n => String(n).padStart(2, '0');
-      const ts = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+      const ts = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
       document.getElementById('last-updated').textContent = ts;
     }
   }
