@@ -219,9 +219,9 @@ body {
 
 /* 數值變化閃爍 */
 @keyframes flash-change {
-  0%   { box-shadow: inset 0 0 0 1px rgba(139,148,158,0.55); }
-  70%  { box-shadow: inset 0 0 0 1px rgba(139,148,158,0.55); }
-  100% { box-shadow: none; }
+  0%   { outline: 1px solid rgba(139,148,158,0.55); outline-offset: -2px; }
+  70%  { outline: 1px solid rgba(139,148,158,0.55); outline-offset: -2px; }
+  100% { outline: 1px solid rgba(139,148,158,0);    outline-offset: -2px; }
 }
 .flash { animation: flash-change 2s ease-out; }
 
@@ -252,8 +252,8 @@ body {
 }
 #pnl-stats .stat-label   { color: #8b949e; }
 #pnl-stats .stat-be      { color: #e6edf3; font-weight: 500; letter-spacing: 0.02em; }
-#pnl-stats .stat-profit  { color: #3fb950; font-weight: 600; }
-#pnl-stats .stat-loss    { color: #f85149; font-weight: 600; }
+#pnl-stats .stat-profit  { color: #f85149; font-weight: 600; }
+#pnl-stats .stat-loss    { color: #3fb950; font-weight: 600; }
 #pnl-stats .stat-strike  { color: #e6edf3; font-weight: 500; }
 
 /* ── noUiSlider 容器 ── */
