@@ -177,8 +177,20 @@ function _setSessionMode(mode) {
   }).catch(() => {});
 }
 
-btnFull.addEventListener('click', () => _setSessionMode('full'));
-btnDay.addEventListener('click',  () => _setSessionMode('day'));
+function _exitSnapshot() {
+  if (!_snapshotMode) return;
+  _snapshotMode = false;
+  _snapshots.forEach(s => {
+    const b = document.getElementById(s.btnId);
+    if (b) b.classList.remove('active');
+  });
+  document.getElementById('last-updated').textContent = '--';
+  document.getElementById('series-code').textContent  = '--';
+  pollFallback();
+}
+
+btnFull.addEventListener('click', () => { _exitSnapshot(); _setSessionMode('full'); });
+btnDay.addEventListener('click',  () => { _exitSnapshot(); _setSessionMode('day');  });
 
 // ── 表格最大絕對值（用來計算 bar 寬度比例） ────────────
 let maxAbsNet = 1;
@@ -477,6 +489,7 @@ async function fetchContracts() {
     _switchSeries(list[defaultIdx]);  // 初始化時設定 active series
 
     sel.onchange = () => {
+      _exitSnapshot();
       const idx = parseInt(sel.value);
       const c   = _contractsData[idx];
       if (!c) return;
@@ -584,8 +597,9 @@ function updateStatus(status, settlement) {
     if (status.last_updated) {
       _serverLastUpdated = status.last_updated;
       const d = new Date(status.last_updated * 1000);
-      document.getElementById('last-updated').textContent =
-        d.toLocaleTimeString('zh-TW', { hour12: false });
+      const pad = n => String(n).padStart(2, '0');
+      const ts = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+      document.getElementById('last-updated').textContent = ts;
     }
   }
 }
@@ -728,6 +742,7 @@ let _snapshotMode = false;
 
 const _snapshots = [
   { btnId: 'btn-snapshot-20260326', data: typeof SNAPSHOT_20260326_03F4 !== 'undefined' ? SNAPSHOT_20260326_03F4 : null },
+  { btnId: 'btn-snapshot-20260327', data: typeof SNAPSHOT_20260327_03F4 !== 'undefined' ? SNAPSHOT_20260327_03F4 : null },
 ];
 
 _snapshots.forEach(({ btnId, data }) => {
@@ -736,14 +751,7 @@ _snapshots.forEach(({ btnId, data }) => {
 
   btn.addEventListener('click', () => {
     if (_snapshotMode && btn.classList.contains('active')) {
-      // 再按一次 → 回 live
-      _snapshotMode = false;
-      btn.classList.remove('active');
-      // 恢復工具列狀態文字
-      document.getElementById('last-updated').textContent = '--';
-      document.getElementById('series-code').textContent = '--';
-      // 觸發一次 poll 立刻恢復畫面
-      pollFallback();
+      _exitSnapshot();
       return;
     }
     // 進入快照模式
@@ -753,6 +761,8 @@ _snapshots.forEach(({ btnId, data }) => {
       if (b) b.classList.remove('active');
     });
     btn.classList.add('active');
+    btnFull.classList.remove('active');
+    btnDay.classList.remove('active');
 
     // 顯示快照資料
     const snap = { ...data };
@@ -762,8 +772,6 @@ _snapshots.forEach(({ btnId, data }) => {
 
     // 直接呼叫 updateTable / updateChart（繞過 handleData 以免被 live 模式判斷攔截）
     _currentSessionMode = 'full';
-    btnFull.classList.add('active');
-    btnDay.classList.remove('active');
     updateTable(snap.table);
     updateChart(snap.pnl, true);
   });
