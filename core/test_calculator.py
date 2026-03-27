@@ -3,7 +3,7 @@ calculator.py 單元測試
 用手算數值驗證邏輯是否與 Excel VBA 一致
 """
 
-from calculator import OptionData, calc_combined_pnl, build_strike_table, parse_strike, parse_side
+from core.calculator import OptionData, calc_combined_pnl, build_strike_table, parse_strike, parse_side
 
 
 def test_parse_strike():

@@ -1,7 +1,7 @@
 # 帳號與憑證（絕對不進版控）
 config_capital.py
 config_fubon.py
-config_xqfap.py
+
 config_bridge.py
 config.py
 *.pfx
@@ -17,14 +17,24 @@ venv/
 dist/
 build/
 
-# Log 檔
+# Log 檔（根目錄散落的）
 *.log
 log/
 CapitalLog/
 discover_out.log
 
+# monitor 資料夾（保留資料夾本身，排除 runtime 內容）
+monitor/*.log
+monitor/xqfap.pid
+monitor/ws_count.txt
+
 # DLL 與相依函式庫
 libs/
+
+# Runtime 暫存（已移至 monitor/，由上方規則排除）
+
+# Claude 工作記憶
+.remember/
 
 # 系統
 .DS_Store

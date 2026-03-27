@@ -23,6 +23,7 @@ import os
 import time
 import ctypes
 import logging
+import logging.handlers
 import threading
 import datetime
 import queue
@@ -39,23 +40,24 @@ except ImportError:
     print("請先安裝 requests：pip install requests")
     sys.exit(1)
 
-try:
-    import config_xqfap as cfg
-except ImportError:
-    print("找不到 config_xqfap.py，請從 config_xqfap_template.py 複製並填入設定")
-    sys.exit(1)
+SERVER_URL = "http://localhost:8000"
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
 )
+_log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'monitor')
+os.makedirs(_log_dir, exist_ok=True)
+_fh = logging.handlers.RotatingFileHandler(
+    os.path.join(_log_dir, 'xqfap.log'),
+    maxBytes=10 * 1024 * 1024, backupCount=3, encoding='utf-8',
+)
+_fh.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
+logging.getLogger().addHandler(_fh)
 logger = logging.getLogger(__name__)
 
 # ── 設定 ──────────────────────────────────────────────────────
 
-XQ_SERIES       = cfg.XQ_SERIES
-SETTLEMENT_DATE = cfg.SETTLEMENT_DATE
-SERVER_URL      = getattr(cfg, 'SERVER_URL', 'http://localhost:8000')
 
 STRIKE_STEP = 50
 MISS_LIMIT  = 10  # 連續10筆miss（=500點空洞）即停；遠端OTM履約價間距可能>250點
@@ -445,7 +447,7 @@ def _discover_contracts(center: int, full_series: str) -> "tuple[list, dict]":
 # ── HTTP 推送 ─────────────────────────────────────────────────
 
 def _post_init(contracts: list, series: str, settlement_date: str = ""):
-    sd = settlement_date or SETTLEMENT_DATE
+    sd = settlement_date or ""
     try:
         r = requests.post(
             f"{SERVER_URL}/api/init",
@@ -1036,7 +1038,7 @@ def _reinit():
             continue
         day_series    = full_series.replace('N', '')
         contracts_day, meta_day = _build_day_meta(meta_full, full_series)
-        sd = _series_sd.get(full_series, SETTLEMENT_DATE)
+        sd = _series_sd.get(full_series, "")
         _post_init(contracts_full, full_series, sd)
         _post_init(contracts_day,  day_series,  sd)
         new_metas[full_series] = meta_full
@@ -1079,7 +1081,7 @@ def _auto_reinit_scheduler():
 
 def _post_contracts(found: list):
     """將有效系列清單（依到期日排序）推送到 main.py /api/contracts"""
-    import taifex_calendar as tc
+    from core import taifex_calendar as tc
     now = datetime.datetime.now()
     _WD = ['一', '二', '三', '四', '五', '六', '日']
     contracts = []
@@ -1144,7 +1146,7 @@ def _scan_valid_series(center: int) -> list[str]:
 
 
 def _do_discover():
-    import taifex_calendar as tc
+    from core import taifex_calendar as tc
     center = _get_center_price()
     logger.info(f"掃描所有有效系列（中心點 {center}，120 組測試）...")
     found = _scan_valid_series(center)
@@ -1326,7 +1328,7 @@ def main():
     global _all_valid_series
 
     # 寫入 PID 檔，供 main.py /api/restart-feed 使用
-    _pid_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'xqfap.pid')
+    _pid_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'monitor', 'xqfap.pid')
     with open(_pid_file, 'w') as _f:
         _f.write(str(os.getpid()))
     atexit.register(lambda: os.remove(_pid_file) if os.path.exists(_pid_file) else None)
@@ -1352,7 +1354,7 @@ def main():
 
     _all_valid_series = valid_series
 
-    import taifex_calendar as tc
+    from core import taifex_calendar as tc
     now   = datetime.datetime.now()
     today = now.date()
 
