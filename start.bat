@@ -4,9 +4,6 @@ echo ============================================
 echo  OptionChart 啟動腳本
 echo ============================================
 
-set BROKER=%1
-if "%BROKER%"=="" set BROKER=capital
-
 cd /d %~dp0
 
 if not exist "%~dp0monitor" mkdir "%~dp0monitor"
@@ -16,8 +13,8 @@ powershell -Command "Start-Process -WindowStyle Hidden -FilePath 'python.exe' -A
 echo       OK (背景執行，log → monitor\uvicorn.log)
 timeout /t 2 /nobreak >nul
 
-echo [2/2] 啟動 %BROKER% feed (%BROKER%_feed.py)...
-powershell -Command "Start-Process -WindowStyle Hidden -FilePath 'python.exe' -ArgumentList '%BROKER%_feed.py' -WorkingDirectory '%~dp0' -RedirectStandardOutput '%~dp0monitor\xqfap.log' -RedirectStandardError '%~dp0monitor\xqfap_err.log'"
+echo [2/2] 啟動 xqfap feed (xqfap_feed.py)...
+powershell -Command "Start-Process -WindowStyle Hidden -FilePath 'python.exe' -ArgumentList 'xqfap_feed.py' -WorkingDirectory '%~dp0' -RedirectStandardOutput '%~dp0monitor\xqfap.log' -RedirectStandardError '%~dp0monitor\xqfap_err.log'"
 echo       OK (背景執行，log → monitor\xqfap.log)
 echo.
 echo 全部背景啟動完成。用 stop.bat 停止。
