@@ -515,6 +515,7 @@ function updateStatus(status, settlement) {
       document.getElementById('sub-count').textContent = status.subscribed_count;
     }
     if (status.last_updated) {
+      _serverLastUpdated = status.last_updated;
       const d = new Date(status.last_updated * 1000);
       document.getElementById('last-updated').textContent =
         d.toLocaleTimeString('zh-TW', { hour12: false });
@@ -526,6 +527,42 @@ function updateStatus(status, settlement) {
 let lastDataTime = 0;
 let dataSource = '--';
 let _currentSessionMode = null;
+
+// ── 饋送中斷 Toast ────────────────────────────────
+let _serverLastUpdated = 0;  // server 端 last_updated（Unix 秒）
+const _FEED_DEAD_THRESHOLD = 90;   // 超過 90s 無更新視為中斷
+const _RESTART_COOLDOWN    = 180;  // 重啟後至少等 180s 才能再重啟
+
+const _feedToast   = document.getElementById('feed-dead-toast');
+const _feedDeadMsg = document.getElementById('feed-dead-msg');
+let _lastRestartAt = 0;  // Unix 秒，上次觸發重啟的時間
+
+setInterval(() => {
+  if (_serverLastUpdated === 0) return;  // 尚未收到第一筆
+  const now = Date.now() / 1000;
+  const ago = Math.round(now - _serverLastUpdated);
+
+  if (ago >= _FEED_DEAD_THRESHOLD) {
+    if (!_feedToast._manualDismiss) {
+      const m = Math.floor(ago / 60), s = ago % 60;
+      const agoStr = `${m > 0 ? m + 'm ' : ''}${s}s`;
+
+      // 自動重啟（cooldown 內不重複觸發）
+      if (now - _lastRestartAt > _RESTART_COOLDOWN) {
+        _lastRestartAt = now;
+        _feedDeadMsg.textContent = `xqfap 停止 ${agoStr}　重啟中...`;
+        fetch('/api/restart-feed', { method: 'POST' }).catch(() => {});
+      } else {
+        const wait = Math.round(_RESTART_COOLDOWN - (now - _lastRestartAt));
+        _feedDeadMsg.textContent = `xqfap 停止 ${agoStr}　重啟後等待中 (${wait}s)`;
+      }
+      _feedToast.classList.add('visible');
+    }
+  } else {
+    _feedToast._manualDismiss = false;  // 資料恢復 → 解除手動關閉鎖
+    _feedToast.classList.remove('visible');
+  }
+}, 5000);
 
 // ── 通用資料處理（WS + polling 共用） ────────────────
 function handleData(data, source) {

@@ -19,13 +19,16 @@ xqfap_feed.py — 新富邦e01 DDE 橋接 (v2.28)
 """
 
 import sys
+import os
 import time
 import ctypes
 import logging
 import threading
 import datetime
 import queue
+import atexit
 import ctypes.wintypes
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import win32ui  # noqa: F401 — dde 依賴它
 import dde
@@ -131,6 +134,7 @@ _BG_POLL_INTERVAL    = 20       # 背景系列輪詢間隔（秒）
 _SWITCH_LISTENER_PORT = 8001    # main.py 切換系列時的 TCP 通知 port
 _BULK_REQ_THREADS    = 4        # bulk_request_series 並行 DDEML 連線數
 _bulk_req_sem        = threading.Semaphore(1)  # 限制同時只跑 1 個 bulk_req，防止 DDE 競爭
+_ADVISE_REQ_THREADS  = 4        # advise_worker 平行 DDE request threads
 
 # 64-bit Windows：handle 是 64-bit pointer。
 # restype / argtypes 兩端都必須宣告，否則 ctypes 預設 c_int（32-bit）截斷。
@@ -465,8 +469,7 @@ def _post_feed(batch: list, series: str):
 # ── 初始快照 ──────────────────────────────────────────────────
 
 def _push_snapshot(meta: dict, series: str):
-    """初始快照：只查 TotalVolume + InOutRatio（各 1 次 pywin32），跳過 Name 驗證和 AvgPrice。
-    avg_price=0，bg_poll 第一輪（~60s）會用 DDEML 補上正確值。"""
+    """初始快照：TotalVolume + InOutRatio 用 pywin32；AvgPrice 用 _req_thread（DDEML，正確小數）。"""
     logger.info(f"開始 push_snapshot [{series}]：{len(meta)} 筆")
     snapshot = []
     for symbol in meta:
@@ -474,7 +477,7 @@ def _push_snapshot(meta: dict, series: str):
             'symbol':       symbol,
             'trade_volume': int(_to_float(_req(f"{symbol}.TF-TotalVolume")) or 0),
             'inout_ratio':  _to_float(_req(f"{symbol}.TF-InOutRatio")),
-            'avg_price':    0.0,
+            'avg_price':    _to_float(_req_thread(f"{symbol}.TF-AvgPrice")),
         })
     if snapshot:
         _post_feed(snapshot, series=series)
@@ -577,73 +580,88 @@ def _advise_unsubscribe(symbols: list):
 _BATCH_WINDOW = 0.5   # 秒：每 0.5s 批次 REQUEST ratio/avg 並推送
 
 
+def _fetch_one_changed(series: str, symbol: str, new_vol: int):
+    """advise_worker 的單一 symbol DDE fetch，跑在 _advise_req_executor 的 thread 上。"""
+    day_series = series.replace('N', '')
+    has_day    = day_series in _all_metas and day_series != series
+
+    ratio_str = _req_thread(f"{symbol}.TF-InOutRatio")
+    avg_str   = _req_thread(f"{symbol}.TF-AvgPrice")
+    new_ratio = _to_float(ratio_str)
+    new_avg   = _to_float(avg_str)
+    prev = _all_prevs.get(series)
+    if prev is not None:
+        prev[symbol] = (new_ratio, new_vol)
+    full_item = {'series': series, 'symbol': symbol,
+                 'trade_volume': new_vol, 'inout_ratio': new_ratio, 'avg_price': new_avg}
+
+    day_item = None
+    if has_day:
+        day_sym     = symbol.replace(series, day_series, 1)
+        d_vol_str   = _req_thread(f"{day_sym}.TF-TotalVolume")
+        d_ratio_str = _req_thread(f"{day_sym}.TF-InOutRatio")
+        d_avg_str   = _req_thread(f"{day_sym}.TF-AvgPrice")
+        d_vol   = int(float(d_vol_str)) if d_vol_str else 0
+        d_ratio = _to_float(d_ratio_str)
+        d_avg   = _to_float(d_avg_str)
+        day_prev = _all_prevs.get(day_series)
+        if day_prev is not None:
+            day_prev[day_sym] = (d_ratio, d_vol)
+        day_item = {'series': day_series, 'symbol': day_sym,
+                    'trade_volume': d_vol, 'inout_ratio': d_ratio, 'avg_price': d_avg}
+
+    return full_item, day_item
+
+
 def _advise_worker():
     """
     批次 worker：收集 _change_queue 的 TotalVolume 變動，
-    每 _BATCH_WINDOW 秒 REQUEST InOutRatio + AvgPrice，批次推送 FastAPI。
+    每 _BATCH_WINDOW 秒批次 REQUEST InOutRatio + AvgPrice（平行 4 threads），推送 FastAPI。
     """
     logger.info("advise worker 啟動")
-    while True:
-        deadline = time.time() + _BATCH_WINDOW
-        changed: dict = {}   # (series, symbol) → new_vol
+    with ThreadPoolExecutor(max_workers=_ADVISE_REQ_THREADS,
+                            thread_name_prefix='advise_req') as executor:
+        while True:
+            deadline = time.time() + _BATCH_WINDOW
+            changed: dict = {}   # (series, symbol) → new_vol
 
-        while time.time() < deadline:
-            try:
-                timeout = max(0.01, deadline - time.time())
-                series, symbol, new_vol = _change_queue.get(timeout=timeout)
-            except queue.Empty:
-                break
-            prev    = _all_prevs.get(series, {})
-            old_vol = prev.get(symbol, (0, -1))[1]
-            if new_vol != old_vol:
-                changed[(series, symbol)] = new_vol
+            while time.time() < deadline:
+                try:
+                    timeout = max(0.01, deadline - time.time())
+                    series, symbol, new_vol = _change_queue.get(timeout=timeout)
+                except queue.Empty:
+                    break
+                prev    = _all_prevs.get(series, {})
+                old_vol = prev.get(symbol, (0, -1))[1]
+                if new_vol != old_vol:
+                    changed[(series, symbol)] = new_vol
 
-        if not changed:
-            continue
+            if not changed:
+                continue
 
-        by_series:     dict = {}
-        by_series_day: dict = {}
+            # 平行 DDE requests（4 threads，各持 thread-local DDEML 連線）
+            futures = {
+                executor.submit(_fetch_one_changed, series, symbol, new_vol): (series, symbol)
+                for (series, symbol), new_vol in changed.items()
+            }
 
-        for (series, symbol), new_vol in changed.items():
-            # ── 全日盤 REQUEST ──────────────────────────────
-            ratio_str = _req_thread(f"{symbol}.TF-InOutRatio")
-            avg_str   = _req_thread(f"{symbol}.TF-AvgPrice")
-            new_ratio = _to_float(ratio_str)
-            new_avg   = _to_float(avg_str)
-            prev = _all_prevs.get(series)
-            if prev is not None:
-                prev[symbol] = (new_ratio, new_vol)
-            by_series.setdefault(series, []).append({
-                'symbol':       symbol,
-                'trade_volume': new_vol,
-                'inout_ratio':  new_ratio,
-                'avg_price':    new_avg,
-            })
+            by_series:     dict = {}
+            by_series_day: dict = {}
+            for fut in as_completed(futures):
+                try:
+                    full_item, day_item = fut.result()
+                    s = full_item.pop('series')
+                    by_series.setdefault(s, []).append(full_item)
+                    if day_item:
+                        ds = day_item.pop('series')
+                        by_series_day.setdefault(ds, []).append(day_item)
+                except Exception as e:
+                    logger.warning(f"advise_worker fetch 失敗: {e}")
 
-            # ── 日盤獨立 REQUEST（不能用全日盤資料改名）──────
-            day_series = series.replace('N', '')
-            if day_series in _all_metas and day_series != series:
-                day_sym       = symbol.replace(series, day_series, 1)
-                d_vol_str     = _req_thread(f"{day_sym}.TF-TotalVolume")
-                d_ratio_str   = _req_thread(f"{day_sym}.TF-InOutRatio")
-                d_avg_str     = _req_thread(f"{day_sym}.TF-AvgPrice")
-                d_vol         = int(float(d_vol_str)) if d_vol_str else 0
-                d_ratio       = _to_float(d_ratio_str)
-                d_avg         = _to_float(d_avg_str)
-                day_prev = _all_prevs.get(day_series)
-                if day_prev is not None:
-                    day_prev[day_sym] = (d_ratio, d_vol)
-                by_series_day.setdefault(day_series, []).append({
-                    'symbol':       day_sym,
-                    'trade_volume': d_vol,
-                    'inout_ratio':  d_ratio,
-                    'avg_price':    d_avg,
-                })
-
-        for series, batch in by_series.items():
-            _post_feed(batch, series)
-        for day_series, batch in by_series_day.items():
-            _post_feed(batch, day_series)
+            for series, batch in by_series.items():
+                _post_feed(batch, series)
+            for day_series, batch in by_series_day.items():
+                _post_feed(batch, day_series)
 
 
 def _bulk_request_series(full_series: str):
@@ -1307,6 +1325,12 @@ def main():
     global _all_metas, _all_prevs, _tracked_full_series, _series_sd
     global _all_valid_series
 
+    # 寫入 PID 檔，供 main.py /api/restart-feed 使用
+    _pid_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'xqfap.pid')
+    with open(_pid_file, 'w') as _f:
+        _f.write(str(os.getpid()))
+    atexit.register(lambda: os.remove(_pid_file) if os.path.exists(_pid_file) else None)
+
     if not _connect_dde():
         sys.exit(1)
     _connect_ddeml()
@@ -1375,6 +1399,9 @@ def main():
         if i == 0:  # 只對 active series 做初始快照；其餘由 bg_poll 第一輪更新
             _push_snapshot(meta_full, full_series)
             _push_snapshot(meta_day,  day_series)
+            # 立刻補一次 DDEML 全量（修正 AvgPrice 小數），不等 bg_poll 60s
+            threading.Thread(target=_bulk_request_series,
+                             args=(full_series,), daemon=True).start()
         else:
             logger.info(f"跳過 push_snapshot [{full_series}]，bg_poll 將補上")
         _post_contracts(_all_valid_series)

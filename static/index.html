@@ -92,6 +92,13 @@
 
 </main>
 
+<!-- ── 資料饋送中斷 Toast ── -->
+<div id="feed-dead-toast">
+  <button class="toast-close" onclick="document.getElementById('feed-dead-toast')._manualDismiss=true;this.parentElement.classList.remove('visible')">✕</button>
+  <div class="toast-title">⚠ 資料饋送中斷</div>
+  <div class="toast-body" id="feed-dead-msg">xqfap 已停止推送資料</div>
+</div>
+
 <script src="/static/snapshot.js"></script>
 <script src="/static/app.js"></script>
 </body>
