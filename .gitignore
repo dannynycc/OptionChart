@@ -26,6 +26,15 @@ discover_out.log
 # DLL 與相依函式庫
 libs/
 
+# Runtime 暫存
+xqfap.pid
+ws_count.txt
+monitor_loop.log
+monitor_night.log
+
+# Claude 工作記憶
+.remember/
+
 # 系統
 .DS_Store
 Thumbs.db
