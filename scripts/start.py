@@ -31,6 +31,14 @@ def server_alive() -> bool:
         return False
 
 
+def daqfap_alive() -> bool:
+    result = subprocess.run(
+        ['tasklist', '/FI', 'IMAGENAME eq daqFAP.exe', '/NH'],
+        capture_output=True, text=True
+    )
+    return 'daqFAP.exe' in result.stdout
+
+
 def xqfap_alive() -> bool:
     if not os.path.exists(PID_FILE):
         return False
@@ -85,6 +93,7 @@ if not xqfap_up:
 
 # ── 等 active series 有 data ─────────────────────────────────
 print("Waiting for data...", flush=True)
+wait_start = time.time()
 while True:
     try:
         r = urllib.request.urlopen(f"{SERVER_URL}/api/status", timeout=3)
@@ -93,6 +102,10 @@ while True:
             break
     except Exception:
         pass
+    # 等超過 15 秒還沒資料，檢查新富邦 e01 是否開啟
+    if time.time() - wait_start > 15 and not daqfap_alive():
+        print("*** 偵測不到新富邦 e01（daqFAP.exe），請先開啟後再繼續 ***", flush=True)
+        wait_start = time.time()  # 重置，避免每 2 秒一直印
     time.sleep(2)
 
 print("Data ready. Opening browser...")
