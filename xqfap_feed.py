@@ -40,11 +40,7 @@ except ImportError:
     print("請先安裝 requests：pip install requests")
     sys.exit(1)
 
-try:
-    import config_xqfap as cfg
-except ImportError:
-    print("找不到 config_xqfap.py，請從 config_xqfap_template.py 複製並填入設定")
-    sys.exit(1)
+SERVER_URL = "http://localhost:8000"
 
 logging.basicConfig(
     level=logging.INFO,
@@ -62,9 +58,6 @@ logger = logging.getLogger(__name__)
 
 # ── 設定 ──────────────────────────────────────────────────────
 
-XQ_SERIES       = cfg.XQ_SERIES
-SETTLEMENT_DATE = cfg.SETTLEMENT_DATE
-SERVER_URL      = getattr(cfg, 'SERVER_URL', 'http://localhost:8000')
 
 STRIKE_STEP = 50
 MISS_LIMIT  = 10  # 連續10筆miss（=500點空洞）即停；遠端OTM履約價間距可能>250點
@@ -454,7 +447,7 @@ def _discover_contracts(center: int, full_series: str) -> "tuple[list, dict]":
 # ── HTTP 推送 ─────────────────────────────────────────────────
 
 def _post_init(contracts: list, series: str, settlement_date: str = ""):
-    sd = settlement_date or SETTLEMENT_DATE
+    sd = settlement_date or ""
     try:
         r = requests.post(
             f"{SERVER_URL}/api/init",
@@ -1045,7 +1038,7 @@ def _reinit():
             continue
         day_series    = full_series.replace('N', '')
         contracts_day, meta_day = _build_day_meta(meta_full, full_series)
-        sd = _series_sd.get(full_series, SETTLEMENT_DATE)
+        sd = _series_sd.get(full_series, "")
         _post_init(contracts_full, full_series, sd)
         _post_init(contracts_day,  day_series,  sd)
         new_metas[full_series] = meta_full

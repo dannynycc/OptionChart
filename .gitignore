@@ -1,7 +1,7 @@
 # 帳號與憑證（絕對不進版控）
 config_capital.py
 config_fubon.py
-config_xqfap.py
+
 config_bridge.py
 config.py
 *.pfx
