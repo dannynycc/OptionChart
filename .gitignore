@@ -17,11 +17,14 @@ venv/
 dist/
 build/
 
-# Log 檔
+# Log 檔（根目錄散落的）
 *.log
 log/
 CapitalLog/
 discover_out.log
+
+# 現役 log 資料夾（保留資料夾本身，排除內容）
+logs/*.log
 
 # DLL 與相依函式庫
 libs/

@@ -23,6 +23,7 @@ import os
 import time
 import ctypes
 import logging
+import logging.handlers
 import threading
 import datetime
 import queue
@@ -49,6 +50,14 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
 )
+_log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'logs')
+os.makedirs(_log_dir, exist_ok=True)
+_fh = logging.handlers.RotatingFileHandler(
+    os.path.join(_log_dir, 'xqfap.log'),
+    maxBytes=10 * 1024 * 1024, backupCount=3, encoding='utf-8',
+)
+_fh.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
+logging.getLogger().addHandler(_fh)
 logger = logging.getLogger(__name__)
 
 # ── 設定 ──────────────────────────────────────────────────────
