@@ -50,7 +50,7 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
 )
-_log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'logs')
+_log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'monitor')
 os.makedirs(_log_dir, exist_ok=True)
 _fh = logging.handlers.RotatingFileHandler(
     os.path.join(_log_dir, 'xqfap.log'),
@@ -1335,7 +1335,7 @@ def main():
     global _all_valid_series
 
     # 寫入 PID 檔，供 main.py /api/restart-feed 使用
-    _pid_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'xqfap.pid')
+    _pid_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'monitor', 'xqfap.pid')
     with open(_pid_file, 'w') as _f:
         _f.write(str(os.getpid()))
     atexit.register(lambda: os.remove(_pid_file) if os.path.exists(_pid_file) else None)

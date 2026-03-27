@@ -25,7 +25,7 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
-_log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'logs')
+_log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'monitor')
 os.makedirs(_log_dir, exist_ok=True)
 _fh = logging.handlers.RotatingFileHandler(
     os.path.join(_log_dir, 'server.log'),
@@ -384,7 +384,7 @@ async def get_status():
 async def restart_feed():
     """終止舊 xqfap_feed.py（依 xqfap.pid）並重新啟動。"""
     base = os.path.dirname(os.path.abspath(__file__))
-    pid_file = os.path.join(base, 'xqfap.pid')
+    pid_file = os.path.join(base, 'monitor', 'xqfap.pid')
     # 終止舊 process
     try:
         with open(pid_file) as f:
@@ -395,7 +395,7 @@ async def restart_feed():
     except Exception as e:
         logger.warning(f"restart-feed: 終止舊 process 失敗（{e}），繼續啟動新的")
     # 啟動新 process，stdout/stderr 導向 logs/xqfap.log
-    log_path = os.path.join(base, 'logs', 'xqfap.log')
+    log_path = os.path.join(base, 'monitor', 'xqfap.log')
     log_file = open(log_path, 'a', encoding='utf-8')
     subprocess.Popen(
         [sys.executable, 'xqfap_feed.py'],

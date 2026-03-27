@@ -13,7 +13,7 @@ INTERVAL = 15       # 秒
 WARN_SEC = 90       # 超過 90s 沒更新 → WARN
 DEAD_SEC = 180      # 超過 180s 沒更新 → DEAD
 
-_log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'logs', 'monitor_night.log')
+_log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'monitor_night.log')
 os.makedirs(os.path.dirname(_log_path), exist_ok=True)
 _log_file = open(_log_path, 'a', encoding='utf-8')
 
