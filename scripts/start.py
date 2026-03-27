@@ -24,7 +24,7 @@ SERVER_URL = "http://localhost:8000"
 
 def server_alive() -> bool:
     try:
-        urllib.request.urlopen(f"{SERVER_URL}/api/status", timeout=2)
+        urllib.request.urlopen(f"{SERVER_URL}/api/status", timeout=0.5)
         return True
     except Exception:
         return False
