@@ -10,6 +10,7 @@ start.py — OptionChart 智慧啟動腳本
 """
 import json
 import os
+import socket
 import subprocess
 import sys
 import time
@@ -24,9 +25,9 @@ SERVER_URL = "http://localhost:8000"
 
 def server_alive() -> bool:
     try:
-        urllib.request.urlopen(f"{SERVER_URL}/api/status", timeout=0.5)
-        return True
-    except Exception:
+        with socket.create_connection(("localhost", 8000), timeout=0.1):
+            return True
+    except OSError:
         return False
 
 
