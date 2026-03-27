@@ -1,5 +1,26 @@
 # Changelog
 
+## v3.2 (2026-03-27)
+
+### 損益圖統計列
+
+**圖表右側上方新增三行統計資訊：**
+- 損益兩平：所有 pnl=0 的履約價（線性內插取整數，可多點）
+- 最大獲利（萬，整數+千分位逗號）及對應履約價
+- 最大損失（萬，整數+千分位逗號）及對應履約價
+- 預估結算價：目前顯示 `--`，公式待定
+
+**修正 max_pain 誤名**：`calc_combined_pnl()` 移除 `max_pain`/`max_pain_value`，更正 docstring 說明此曲線涵蓋 Call/Put 四方淨損益，非傳統 Max Pain。
+
+**版面修正**：
+- slider padding-top 52px（避免 tooltip 蓋住 x 軸「履約價」文字）
+- slider padding-left 75px（對齊 ECharts Y 軸）
+- ECharts grid top 縮至 20px（減少統計列與圖表間空白）
+
+**變更檔案**：`core/calculator.py`、`static/index.html`、`static/app.js`、`static/style.css`
+
+---
+
 ## v2.26 (2026-03-26)
 
 ### xqfap_feed.py 多執行緒 DDEML 輪詢池

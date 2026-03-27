@@ -75,23 +75,24 @@ def calc_combined_pnl(
     puts: list[OptionData],
 ) -> dict:
     """
-    計算所有履約價作為假設結算價時的買方合併損益曲線。
+    計算所有履約價作為假設結算價時的全市場淨損益曲線。
+
+    每個履約價的貢獻 = net_position × (內含價值 - 均價)
+    net_position 已編碼淨方向（正→淨買方、負→淨賣方），
+    因此自動涵蓋 Call買方/賣方、Put買方/賣方 四方。
 
     回傳：
     {
         "strikes": [履約價列表，升序],
         "pnl":     [對應的合併損益（億元）],
-        "max_pain": 最小損益點的履約價（Max Pain）,
-        "max_pain_value": 最小損益值（億元）,
     }
     """
-    # 取所有履約價的聯集，排序
     all_strikes = sorted(set(
         [c.strike for c in calls] + [p.strike for p in puts]
     ))
 
     if not all_strikes:
-        return {"strikes": [], "pnl": [], "max_pain": None, "max_pain_value": None}
+        return {"strikes": [], "pnl": []}
 
     strikes_out = []
     pnl_out = []
@@ -99,20 +100,12 @@ def calc_combined_pnl(
     for settlement in all_strikes:
         call_pnl = _calc_call_pnl(settlement, calls)
         put_pnl  = _calc_put_pnl(settlement, puts)
-        combined = call_pnl + put_pnl
         strikes_out.append(settlement)
-        pnl_out.append(round(combined, 4))
-
-    # Max Pain = 合併損益最小值對應的履約價
-    min_idx   = pnl_out.index(min(pnl_out))
-    max_pain  = strikes_out[min_idx]
-    max_pain_value = pnl_out[min_idx]
+        pnl_out.append(round(call_pnl + put_pnl, 4))
 
     return {
-        "strikes":        strikes_out,
-        "pnl":            pnl_out,
-        "max_pain":       max_pain,
-        "max_pain_value": max_pain_value,
+        "strikes": strikes_out,
+        "pnl":     pnl_out,
     }
 
 

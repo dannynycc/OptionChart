@@ -235,9 +235,26 @@ body {
   min-height: 0;
 }
 
+/* ── 損益統計列 ── */
+#pnl-stats {
+  flex-shrink: 0;
+  font-size: 12px;
+  line-height: 1.7;
+  padding: 0 4px 2px;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  min-height: 38px;
+}
+#pnl-stats .stat-label   { color: #8b949e; }
+#pnl-stats .stat-be      { color: #e6edf3; font-weight: 500; letter-spacing: 0.02em; }
+#pnl-stats .stat-profit  { color: #3fb950; font-weight: 600; }
+#pnl-stats .stat-loss    { color: #f85149; font-weight: 600; }
+#pnl-stats .stat-strike  { color: #e6edf3; font-weight: 500; }
+
 /* ── noUiSlider 容器 ── */
 #range-slider-wrap {
-  padding: 12px 20px 4px;
+  padding: 52px 20px 4px 75px;
   flex-shrink: 0;
 }
 

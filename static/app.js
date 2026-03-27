@@ -24,7 +24,7 @@ function _interpolate(x) {
   return null;
 }
 
-const _GRID = { top: 40, right: 20, bottom: 50, left: 75 };
+const _GRID = { top: 20, right: 20, bottom: 50, left: 75 };
 
 const chartOption = {
   backgroundColor: 'transparent',
@@ -264,6 +264,71 @@ function updateChart(pnl, forceReset = false) {
   // 每次資料更新都重算 Y 軸：合約切換、盤別切換、一般 tick 皆 fit
   const [curMin, curMax] = _nouiSlider ? _nouiSlider.get().map(Number) : [minS, maxS];
   _recalcYAxis(curMin, curMax);
+
+  _updatePnlStats();
+}
+
+// ── 損益統計（兩平點 / 最大獲利 / 最大損失）────────────
+function _statSpan(cls, text) {
+  const s = document.createElement('span');
+  s.className = cls;
+  s.textContent = text;
+  return s;
+}
+
+function _updatePnlStats() {
+  const el = document.getElementById('pnl-stats');
+  if (!el) return;
+  el.textContent = '';
+  if (_chartPnl.length === 0) return;
+
+  // 最大獲利 / 最大損失
+  const maxPnl    = Math.max(..._chartPnl);
+  const maxStrike = _chartStrikes[_chartPnl.indexOf(maxPnl)];
+  const minPnl    = Math.min(..._chartPnl);
+  const minStrike = _chartStrikes[_chartPnl.indexOf(minPnl)];
+
+  // 損益兩平點（線性內插，取整數）
+  const bePts = [];
+  for (let i = 0; i < _chartPnl.length - 1; i++) {
+    const y0 = _chartPnl[i], y1 = _chartPnl[i + 1];
+    if (y0 === 0) {
+      bePts.push(_chartStrikes[i]);
+    } else if ((y0 < 0) !== (y1 < 0)) {
+      const x = _chartStrikes[i] + (y0 / (y0 - y1)) * (_chartStrikes[i + 1] - _chartStrikes[i]);
+      bePts.push(Math.round(x));
+    }
+  }
+  if (_chartPnl.at(-1) === 0) bePts.push(_chartStrikes.at(-1));
+
+  const fmt = v => (v >= 0 ? '+' : '-') + Math.abs(Math.round(v)).toLocaleString();
+
+  // 第一行：損益兩平
+  const row1 = document.createElement('div');
+  row1.appendChild(_statSpan('stat-label', '損益兩平'));
+  row1.appendChild(document.createTextNode('\u3000'));
+  row1.appendChild(_statSpan('stat-be', bePts.length ? bePts.join(' / ') : '無'));
+  el.appendChild(row1);
+
+  // 第二行：最大獲利 / 最大損失
+  const row2 = document.createElement('div');
+  row2.appendChild(_statSpan('stat-label', '最大獲利'));
+  row2.appendChild(document.createTextNode('\u3000'));
+  row2.appendChild(_statSpan('stat-profit', fmt(maxPnl) + ' 萬 '));
+  row2.appendChild(_statSpan('stat-strike', '@' + maxStrike));
+  row2.appendChild(document.createTextNode('\u3000\u3000'));
+  row2.appendChild(_statSpan('stat-label', '最大損失'));
+  row2.appendChild(document.createTextNode('\u3000'));
+  row2.appendChild(_statSpan('stat-loss', fmt(minPnl) + ' 萬 '));
+  row2.appendChild(_statSpan('stat-strike', '@' + minStrike));
+  el.appendChild(row2);
+
+  // 第三行：預估結算價（公式待定）
+  const row3 = document.createElement('div');
+  row3.appendChild(_statSpan('stat-label', '預估結算價'));
+  row3.appendChild(document.createTextNode('\u3000'));
+  row3.appendChild(_statSpan('stat-be', '--'));
+  el.appendChild(row3);
 }
 
 // ── DOM helper ────────────────────────────────────────
@@ -371,6 +436,8 @@ function _clearDisplay() {
   document.getElementById('strike-table-body').textContent = '';
   _chartStrikes = [];
   _chartPnl     = [];
+  const statsEl = document.getElementById('pnl-stats');
+  if (statsEl) statsEl.textContent = '';
   chart.setOption({ series: [
     { name: '_pos',    data: [] },
     { name: '_neg',    data: [] },
