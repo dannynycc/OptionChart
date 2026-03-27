@@ -75,6 +75,7 @@ window.addEventListener('resize', () => chart.resize());
 
 // ── Hover：插值 + 十字準星 + 實心圓點 + Tooltip ────────
 let _hoverRaf = false;
+let _mouseStrike = null;  // 目前滑鼠在圖表上對應的履約價（data-space X）
 
 function _clearHover() {
   chart.setOption({ graphic: [] }, { replaceMerge: ['graphic'] });
@@ -87,10 +88,12 @@ chart.getZr().on('mousemove', function(e) {
 
   const px = [e.offsetX, e.offsetY];
   if (!chart.containPixel('grid', px) || _chartStrikes.length === 0) {
+    _mouseStrike = null;
     _clearHover(); return;
   }
 
   const [hx] = chart.convertFromPixel({ seriesIndex: 2 }, px);
+  _mouseStrike = hx;
   const hy   = _interpolate(hx);
   if (hy === null) { _clearHover(); return; }
 
@@ -132,21 +135,28 @@ chart.getZr().on('mousemove', function(e) {
   ]}, { replaceMerge: ['graphic'] });
 });
 
-chart.getZr().on('mouseout', _clearHover);
+chart.getZr().on('mouseout', () => { _mouseStrike = null; _clearHover(); });
 
 // ── 滑鼠滾輪縮放（調整 noUiSlider X 軸範圍） ──────────
 chartDom.addEventListener('wheel', function(e) {
   e.preventDefault();
   if (!_nouiSlider || _chartStrikes.length === 0) return;
   const [curMin, curMax] = _nouiSlider.get().map(Number);
-  const center   = (curMin + curMax) / 2;
+  const center   = (_mouseStrike !== null) ? _mouseStrike : (curMin + curMax) / 2;
   const factor   = e.deltaY > 0 ? 1.15 : 0.87;  // 向下放大、向上縮小
   const fullMin  = Math.min(..._chartStrikes);
   const fullMax  = Math.max(..._chartStrikes);
   const newRange = Math.max((curMax - curMin) * factor, 200);  // 最小 200 點
-  const newMin   = Math.max(fullMin, center - newRange / 2);
-  const newMax   = Math.min(fullMax, center + newRange / 2);
-  _nouiSlider.set([newMin, newMax]);
+  if (newRange >= fullMax - fullMin) {
+    _nouiSlider.set([fullMin, fullMax]);
+    return;
+  }
+  // 若一側被邊界夾住，把多出的空間補到另一側，確保 zoom out 能持續擴張直到全範圍
+  let newMin = center - newRange / 2;
+  let newMax = center + newRange / 2;
+  if (newMax > fullMax) { newMax = fullMax; newMin = fullMax - newRange; }
+  if (newMin < fullMin) { newMin = fullMin; newMax = fullMin + newRange; }
+  _nouiSlider.set([Math.max(fullMin, newMin), Math.min(fullMax, newMax)]);
 }, { passive: false });
 
 // ── 全日盤 / 日盤(一般) 切換 ──────────────────────────
@@ -505,6 +515,7 @@ function updateStatus(status, settlement) {
       document.getElementById('sub-count').textContent = status.subscribed_count;
     }
     if (status.last_updated) {
+      _serverLastUpdated = status.last_updated;
       const d = new Date(status.last_updated * 1000);
       document.getElementById('last-updated').textContent =
         d.toLocaleTimeString('zh-TW', { hour12: false });
@@ -517,10 +528,47 @@ let lastDataTime = 0;
 let dataSource = '--';
 let _currentSessionMode = null;
 
+// ── 饋送中斷 Toast ────────────────────────────────
+let _serverLastUpdated = 0;  // server 端 last_updated（Unix 秒）
+const _FEED_DEAD_THRESHOLD = 90;   // 超過 90s 無更新視為中斷
+const _RESTART_COOLDOWN    = 180;  // 重啟後至少等 180s 才能再重啟
+
+const _feedToast   = document.getElementById('feed-dead-toast');
+const _feedDeadMsg = document.getElementById('feed-dead-msg');
+let _lastRestartAt = 0;  // Unix 秒，上次觸發重啟的時間
+
+setInterval(() => {
+  if (_serverLastUpdated === 0) return;  // 尚未收到第一筆
+  const now = Date.now() / 1000;
+  const ago = Math.round(now - _serverLastUpdated);
+
+  if (ago >= _FEED_DEAD_THRESHOLD) {
+    if (!_feedToast._manualDismiss) {
+      const m = Math.floor(ago / 60), s = ago % 60;
+      const agoStr = `${m > 0 ? m + 'm ' : ''}${s}s`;
+
+      // 自動重啟（cooldown 內不重複觸發）
+      if (now - _lastRestartAt > _RESTART_COOLDOWN) {
+        _lastRestartAt = now;
+        _feedDeadMsg.textContent = `xqfap 停止 ${agoStr}　重啟中...`;
+        fetch('/api/restart-feed', { method: 'POST' }).catch(() => {});
+      } else {
+        const wait = Math.round(_RESTART_COOLDOWN - (now - _lastRestartAt));
+        _feedDeadMsg.textContent = `xqfap 停止 ${agoStr}　重啟後等待中 (${wait}s)`;
+      }
+      _feedToast.classList.add('visible');
+    }
+  } else {
+    _feedToast._manualDismiss = false;  // 資料恢復 → 解除手動關閉鎖
+    _feedToast.classList.remove('visible');
+  }
+}, 5000);
+
 // ── 通用資料處理（WS + polling 共用） ────────────────
 function handleData(data, source) {
   lastDataTime = Date.now();
   dataSource = source || 'WS';
+  if (_snapshotMode) return;  // 快照模式：忽略 live 資料
   const modeChanged = data.session_mode !== _currentSessionMode;
   _currentSessionMode = data.session_mode;
   if (modeChanged) {
@@ -607,6 +655,52 @@ async function pollFallback() {
 setInterval(pollFallback, 2000);
 
 connect();
+
+// ── 快照模式 ─────────────────────────────────────────
+let _snapshotMode = false;
+
+const _snapshots = [
+  { btnId: 'btn-snapshot-20260326', data: typeof SNAPSHOT_20260326_03F4 !== 'undefined' ? SNAPSHOT_20260326_03F4 : null },
+];
+
+_snapshots.forEach(({ btnId, data }) => {
+  const btn = document.getElementById(btnId);
+  if (!btn || !data) return;
+
+  btn.addEventListener('click', () => {
+    if (_snapshotMode && btn.classList.contains('active')) {
+      // 再按一次 → 回 live
+      _snapshotMode = false;
+      btn.classList.remove('active');
+      // 恢復工具列狀態文字
+      document.getElementById('last-updated').textContent = '--';
+      document.getElementById('series-code').textContent = '--';
+      // 觸發一次 poll 立刻恢復畫面
+      pollFallback();
+      return;
+    }
+    // 進入快照模式
+    _snapshotMode = true;
+    _snapshots.forEach(s => {
+      const b = document.getElementById(s.btnId);
+      if (b) b.classList.remove('active');
+    });
+    btn.classList.add('active');
+
+    // 顯示快照資料
+    const snap = { ...data };
+    // 覆蓋工具列顯示
+    document.getElementById('last-updated').textContent = data._snapshot_time || '--';
+    document.getElementById('series-code').textContent  = 'TXYN03（快照）';
+
+    // 直接呼叫 updateTable / updateChart（繞過 handleData 以免被 live 模式判斷攔截）
+    _currentSessionMode = 'full';
+    btnFull.classList.add('active');
+    btnDay.classList.remove('active');
+    updateTable(snap.table);
+    updateChart(snap.pnl, true);
+  });
+});
 
 // ── 左側面板拖拉調整寬度 ─────────────────────────────
 const _leftPanel    = document.getElementById('left-panel');
