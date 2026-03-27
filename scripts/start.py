@@ -94,6 +94,8 @@ if not xqfap_up:
 # ── 等 active series 有 data ─────────────────────────────────
 print("Waiting for data...", flush=True)
 wait_start = time.time()
+xqfap_restarted = False
+
 while True:
     try:
         r = urllib.request.urlopen(f"{SERVER_URL}/api/status", timeout=3)
@@ -102,10 +104,32 @@ while True:
             break
     except Exception:
         pass
-    # 等超過 15 秒還沒資料，檢查新富邦 e01 是否開啟
-    if time.time() - wait_start > 15 and not daqfap_alive():
-        print("*** 偵測不到新富邦 e01（daqFAP.exe），請先開啟後再繼續 ***", flush=True)
-        wait_start = time.time()  # 重置，避免每 2 秒一直印
+
+    elapsed = time.time() - wait_start
+
+    if not daqfap_alive():
+        # 新富邦 e01 沒開
+        if elapsed > 15:
+            print("*** 偵測不到新富邦 e01（daqFAP.exe），請先開啟後再繼續 ***", flush=True)
+            wait_start = time.time()
+    elif not xqfap_restarted and elapsed > 30:
+        # e01 有開但 30 秒無資料 → 重啟 xqfap 一次
+        print("新富邦 e01 有開但無資料，嘗試重啟 xqfap...", flush=True)
+        if os.path.exists(PID_FILE):
+            try:
+                with open(PID_FILE) as f:
+                    old_pid = int(f.read().strip())
+                subprocess.run(['taskkill', '/F', '/PID', str(old_pid)], capture_output=True)
+            except Exception:
+                pass
+        start_xqfap()
+        xqfap_restarted = True
+        wait_start = time.time()
+    elif xqfap_restarted and elapsed > 30:
+        # 重啟後還是沒資料
+        print("*** 仍無資料，請手動重啟新富邦 e01 後再試 ***", flush=True)
+        wait_start = time.time()
+
     time.sleep(2)
 
 print("Data ready. Opening browser...")
