@@ -1088,7 +1088,7 @@ def _auto_reinit_scheduler():
 
 def _post_contracts(found: list):
     """將有效系列清單（依到期日排序）推送到 main.py /api/contracts"""
-    import taifex_calendar as tc
+    from core import taifex_calendar as tc
     now = datetime.datetime.now()
     _WD = ['一', '二', '三', '四', '五', '六', '日']
     contracts = []
@@ -1153,7 +1153,7 @@ def _scan_valid_series(center: int) -> list[str]:
 
 
 def _do_discover():
-    import taifex_calendar as tc
+    from core import taifex_calendar as tc
     center = _get_center_price()
     logger.info(f"掃描所有有效系列（中心點 {center}，120 組測試）...")
     found = _scan_valid_series(center)
@@ -1361,7 +1361,7 @@ def main():
 
     _all_valid_series = valid_series
 
-    import taifex_calendar as tc
+    from core import taifex_calendar as tc
     now   = datetime.datetime.now()
     today = now.date()
 

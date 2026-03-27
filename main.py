@@ -19,7 +19,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
-from calculator import OptionData, calc_combined_pnl, build_strike_table
+from core.calculator import OptionData, calc_combined_pnl, build_strike_table
 
 logging.basicConfig(
     level=logging.INFO,
