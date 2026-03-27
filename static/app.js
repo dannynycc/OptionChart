@@ -75,6 +75,7 @@ window.addEventListener('resize', () => chart.resize());
 
 // ── Hover：插值 + 十字準星 + 實心圓點 + Tooltip ────────
 let _hoverRaf = false;
+let _mouseStrike = null;  // 目前滑鼠在圖表上對應的履約價（data-space X）
 
 function _clearHover() {
   chart.setOption({ graphic: [] }, { replaceMerge: ['graphic'] });
@@ -87,10 +88,12 @@ chart.getZr().on('mousemove', function(e) {
 
   const px = [e.offsetX, e.offsetY];
   if (!chart.containPixel('grid', px) || _chartStrikes.length === 0) {
+    _mouseStrike = null;
     _clearHover(); return;
   }
 
   const [hx] = chart.convertFromPixel({ seriesIndex: 2 }, px);
+  _mouseStrike = hx;
   const hy   = _interpolate(hx);
   if (hy === null) { _clearHover(); return; }
 
@@ -132,21 +135,28 @@ chart.getZr().on('mousemove', function(e) {
   ]}, { replaceMerge: ['graphic'] });
 });
 
-chart.getZr().on('mouseout', _clearHover);
+chart.getZr().on('mouseout', () => { _mouseStrike = null; _clearHover(); });
 
 // ── 滑鼠滾輪縮放（調整 noUiSlider X 軸範圍） ──────────
 chartDom.addEventListener('wheel', function(e) {
   e.preventDefault();
   if (!_nouiSlider || _chartStrikes.length === 0) return;
   const [curMin, curMax] = _nouiSlider.get().map(Number);
-  const center   = (curMin + curMax) / 2;
+  const center   = (_mouseStrike !== null) ? _mouseStrike : (curMin + curMax) / 2;
   const factor   = e.deltaY > 0 ? 1.15 : 0.87;  // 向下放大、向上縮小
   const fullMin  = Math.min(..._chartStrikes);
   const fullMax  = Math.max(..._chartStrikes);
   const newRange = Math.max((curMax - curMin) * factor, 200);  // 最小 200 點
-  const newMin   = Math.max(fullMin, center - newRange / 2);
-  const newMax   = Math.min(fullMax, center + newRange / 2);
-  _nouiSlider.set([newMin, newMax]);
+  if (newRange >= fullMax - fullMin) {
+    _nouiSlider.set([fullMin, fullMax]);
+    return;
+  }
+  // 若一側被邊界夾住，把多出的空間補到另一側，確保 zoom out 能持續擴張直到全範圍
+  let newMin = center - newRange / 2;
+  let newMax = center + newRange / 2;
+  if (newMax > fullMax) { newMax = fullMax; newMin = fullMax - newRange; }
+  if (newMin < fullMin) { newMin = fullMin; newMax = fullMin + newRange; }
+  _nouiSlider.set([Math.max(fullMin, newMin), Math.min(fullMax, newMax)]);
 }, { passive: false });
 
 // ── 全日盤 / 日盤(一般) 切換 ──────────────────────────
