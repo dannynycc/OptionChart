@@ -948,9 +948,9 @@ def _series_watcher():
 
 def _bg_poll_one_series(full_series: str, offset: float):
     """
-    背景 thread：每 _BG_POLL_INTERVAL 秒對 active series 做一次心跳推送，
-    維持 last_updated 時間戳（盤後 advise 靜止時仍能讓前端知道資料還活著）。
-    不再做全量 REQUEST，避免與 ADVISE 產生 race condition。
+    背景 thread：每 _BG_POLL_INTERVAL 秒輪詢一次。
+    - active series：只發心跳（ADVISE + quote_poll 已即時更新，不做全量避免 race condition）
+    - 背景 series：做全量 REQUEST 補資料（無 ADVISE，不會 race）
     """
     time.sleep(offset)
     while True:
@@ -960,6 +960,9 @@ def _bg_poll_one_series(full_series: str, offset: float):
                 requests.post(f"{SERVER_URL}/api/heartbeat?series={full_series}", timeout=2)
             except Exception:
                 pass
+        else:
+            logger.info(f"[bg_poll] 輪詢 {full_series}")
+            _bulk_request_series(full_series)
         time.sleep(_BG_POLL_INTERVAL)
 
 
@@ -1490,7 +1493,9 @@ def main():
             threading.Thread(target=_bulk_request_series,
                              args=(full_series,), daemon=True).start()
         else:
-            logger.info(f"跳過 push_snapshot [{full_series}]，bg_poll 將補上")
+            logger.info(f"跳過 push_snapshot [{full_series}]，立即背景載入")
+            threading.Thread(target=_bulk_request_series,
+                             args=(full_series,), daemon=True).start()
         _post_contracts(_all_valid_series)
 
     if not _all_metas:
