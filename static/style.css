@@ -233,12 +233,7 @@ body {
 .col-put-val.val-neg  { color: #f85149; }
 
 /* 數值變化閃爍 */
-@keyframes flash-change {
-  0%   { outline: 1px solid rgba(139,148,158,0.55); outline-offset: -2px; }
-  70%  { outline: 1px solid rgba(139,148,158,0.55); outline-offset: -2px; }
-  100% { outline: 1px solid rgba(139,148,158,0);    outline-offset: -2px; }
-}
-.flash { animation: flash-change 2s ease-out; }
+.flash { outline: 1px solid rgba(139,148,158,0.55); outline-offset: -2px; }
 
 /* ── 右側：損益圖 ── */
 #right-panel {

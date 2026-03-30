@@ -373,20 +373,32 @@ function _updatePnlStats() {
 // ── DOM helper ────────────────────────────────────────
 function _cell(cls, text, flash) {
   const d = document.createElement('div');
+  d._baseCls = cls;
   d.className = cls + (flash ? ' flash' : '');
   d.textContent = text;
+  if (flash) {
+    d._flashTimer = setTimeout(() => {
+      d.classList.remove('flash');
+      d._flashTimer = null;
+    }, 2000);
+  }
   return d;
 }
 function _fmtPrice(v) {
   return v >= 50 ? String(Math.round(v)) : v.toFixed(1);
 }
 function _updateCell(el, cls, text, flash) {
-  if (el.className !== cls) el.className = cls;
+  if (el._baseCls !== cls) {
+    el._baseCls = cls;
+    el.className = cls + (el.classList.contains('flash') ? ' flash' : '');
+  }
   if (el.textContent !== text) el.textContent = text;
-  if (flash) {
-    el.classList.remove('flash');
-    void el.offsetWidth;  // 強制 reflow，讓瀏覽器記錄「無 flash」狀態再加回
+  if (flash && !el._flashTimer) {
     el.classList.add('flash');
+    el._flashTimer = setTimeout(() => {
+      el.classList.remove('flash');
+      el._flashTimer = null;
+    }, 2000);
   }
 }
 function _barCell(wrapCls, barCls, pct) {
@@ -438,8 +450,10 @@ function updateTable(rows) {
 
     const prev = prevValues[key] || {};
     const ch = (v, k) => prev[k] !== v;
+    const syn = r.synthetic_futures, pc = r.pnl_call, pp = r.pnl_put, pcomb = r.pnl_combined;
     prevValues[key] = { nc, vc, rc_, avg_c: r.avg_price_call, ac, bc, cbid, cask, clast,
-                        np, vp, rp_, avg_p: r.avg_price_put,  ap, bp, pbid, pask, plast };
+                        np, vp, rp_, avg_p: r.avg_price_put,  ap, bp, pbid, pask, plast,
+                        syn, pc, pp, pcomb };
 
     const ncCls = 'col-call-val' + (nc > 0 ? ' val-pos' : nc < 0 ? ' val-neg' : '');
     const npCls = 'col-put-val'  + (displayedNp > 0 ? ' val-pos' : displayedNp < 0 ? ' val-neg' : '');
@@ -471,10 +485,10 @@ function updateTable(rows) {
       _updateCell(c.put_vol,    'col-put-vol',    vp > 0 ? String(vp) : '',                          ch(vp,  'vp'));
       _updateCell(c.put_ratio,  'col-put-ratio',  vp > 0 ? rp_.toFixed(2) : '',                      ch(rp_, 'rp_'));
       _updateCell(c.put_avg,    'col-put-avg',    r.avg_price_put > 0 ? r.avg_price_put.toFixed(1) : '', ch(r.avg_price_put, 'avg_p'));
-      c.synthetic.textContent    = r.synthetic_futures != null ? r.synthetic_futures.toFixed(1) : '';
-      c.pnl_call.textContent     = r.pnl_call     != null ? r.pnl_call.toFixed(4)     : '';
-      c.pnl_put.textContent      = r.pnl_put      != null ? r.pnl_put.toFixed(4)      : '';
-      c.pnl_combined.textContent = r.pnl_combined != null ? r.pnl_combined.toFixed(4) : '';
+      _updateCell(c.synthetic,    'col-synthetic',    syn   != null ? syn.toFixed(1)   : '', ch(syn,   'syn'));
+      _updateCell(c.pnl_call,    'col-pnl-call',     pc    != null ? pc.toFixed(4)    : '', ch(pc,    'pc'));
+      _updateCell(c.pnl_put,     'col-pnl-put',      pp    != null ? pp.toFixed(4)    : '', ch(pp,    'pp'));
+      _updateCell(c.pnl_combined,'col-pnl-combined', pcomb != null ? pcomb.toFixed(4) : '', ch(pcomb, 'pcomb'));
     } else {
       // ── 首次建立 row ──
       const row = document.createElement('div');
@@ -539,6 +553,7 @@ function _clearDisplay() {
   const tb = document.getElementById('strike-table-body');
   tb.textContent = '';
   tb._rowMap = {};
+  for (const k of Object.keys(prevValues)) delete prevValues[k];
   _tableScrolled = false;
   _chartStrikes = [];
   _chartPnl     = [];

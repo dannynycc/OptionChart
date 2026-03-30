@@ -1,5 +1,23 @@
 # Changelog
 
+## v3.9 (2026-03-30)
+
+### 閃爍框行為修正、synthetic/pnl 補上 flash
+
+#### 閃爍框根治
+- 改用 JS setTimeout 取代 CSS animation 控制閃爍，消除 animation restart 造成的視覺不一致
+- `_updateCell`：改用 `el._baseCls` 儲存 base class，更新 className 時保留 flash class，避免 flash 被 className 覆寫清除
+- Flash 計時策略改為「第一次觸發才啟動 2s timer，計時中不重設」，確保不論更新頻率高低一律亮 2s 後熄滅
+- `_cell`（row 建立路徑）補上 setTimeout，修正 flash class 寫入後永不熄滅的 bug
+- `_clearDisplay` 同步清空 `prevValues`，修正合約切換後所有欄位同時 flash 且不熄滅的 bug
+- CSS 移除 `@keyframes flash-change` animation，`.flash` 改為單純 outline 樣式
+
+#### synthetic / pnl 欄位補上 flash
+- `synthetic`、`pnl_call`、`pnl_put`、`pnl_combined` 改用 `_updateCell`，補上變化偵測與 flash
+- `prevValues` 追蹤加入 `syn`、`pc`、`pp`、`pcomb`
+
+---
+
 ## v3.8 (2026-03-30)
 
 ### 全欄位更新架構重整、race condition 修正
