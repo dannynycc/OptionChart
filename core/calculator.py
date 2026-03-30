@@ -107,7 +107,8 @@ def calc_atm(
 
     回傳：
       (atm_strike, synthetic_map)
-      synthetic_map = {履約價: F_K}，僅含參與計算的 10 檔
+      implied       = 15 檔 F_K 平均值（四捨五入整數），即預估結算價
+      synthetic_map = {履約價: F_K}，僅含參與計算的 15 檔（中心±7）
     """
     call_map = {c.strike: _effective_price(c) for c in calls if _effective_price(c) > 0}
     put_map  = {p.strike: _effective_price(p) for p in puts  if _effective_price(p) > 0}
@@ -122,11 +123,14 @@ def calc_atm(
         rough_implied = sum(k + call_map[k] - put_map[k] for k in common) / len(common)
         center = rough_implied
 
-    nearest = sorted(common, key=lambda k: abs(k - center))[:10]
+    # 先找最接近 center 的那一檔作為中心，再向上/向下各取 7 檔（共 15 檔）
+    center_strike = min(common, key=lambda k: abs(k - center))
+    idx = common.index(center_strike)
+    nearest = common[max(0, idx - 7): idx + 8]   # 最多 15 檔（邊界可能少）
     synthetic_map = {k: round(k + call_map[k] - put_map[k], 1) for k in nearest}
-    implied = sum(synthetic_map.values()) / len(synthetic_map)
+    implied = round(sum(synthetic_map.values()) / len(synthetic_map))
     atm     = min(common, key=lambda k: abs(k - implied))
-    return atm, synthetic_map
+    return atm, synthetic_map, implied
 
 
 def calc_combined_pnl(

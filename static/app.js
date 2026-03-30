@@ -26,7 +26,7 @@ function _interpolate(x) {
   return null;
 }
 
-const _GRID = { top: 20, right: 20, bottom: 50, left: 75 };
+const _GRID = { top: 40, right: 20, bottom: 50, left: 75 };
 
 const chartOption = {
   backgroundColor: 'transparent',
@@ -267,7 +267,7 @@ function updateATMLine(atmStrike) {
         label: {
           show: true,
           position: 'end',
-          formatter: `ATM\n${atmStrike}`,
+          formatter: `價平\n${atmStrike}`,
           color: '#ffa657',
           fontSize: 11,
           fontWeight: 'bold',
@@ -315,6 +315,7 @@ function _statSpan(cls, text) {
   return s;
 }
 
+let _impliedForward = null;
 function _updatePnlStats() {
   const el = document.getElementById('pnl-stats');
   if (!el) return;
@@ -362,11 +363,11 @@ function _updatePnlStats() {
   row2.appendChild(_statSpan('stat-strike', '@' + minStrike));
   el.appendChild(row2);
 
-  // 第三行：預估結算價（公式待定）
+  // 第三行：預估結算價（15檔合成期貨平均）
   const row3 = document.createElement('div');
   row3.appendChild(_statSpan('stat-label', '預估結算價'));
   row3.appendChild(document.createTextNode('\u3000'));
-  row3.appendChild(_statSpan('stat-be', '--'));
+  row3.appendChild(_statSpan('stat-atm', _impliedForward != null ? String(_impliedForward) : '--'));
   el.appendChild(row3);
 }
 
@@ -774,6 +775,7 @@ function handleData(data, source) {
   updateTable(data.table);
   updateChart(data.pnl, modeChanged);
   if (data.atm_strike) updateATMLine(data.atm_strike);
+  if (data.implied_forward != null) { _impliedForward = data.implied_forward; _updatePnlStats(); }
   updateStatus(data.status, data.settlement);
 }
 

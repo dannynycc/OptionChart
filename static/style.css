@@ -265,6 +265,7 @@ body {
 #pnl-stats .stat-profit  { color: #f85149; font-weight: 600; }
 #pnl-stats .stat-loss    { color: #3fb950; font-weight: 600; }
 #pnl-stats .stat-strike  { color: #e6edf3; font-weight: 500; }
+#pnl-stats .stat-atm     { color: #ffa657; font-weight: 600; }
 
 /* ── noUiSlider 容器 ── */
 #range-slider-wrap {

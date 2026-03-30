@@ -1,5 +1,24 @@
 # Changelog
 
+## v3.10 (2026-03-30)
+
+### 合成期貨改 15 檔、預估結算價顯示、圖表修正
+
+#### 合成期貨計算改為 15 檔（中心±7）
+- `calc_atm()` 改為先找最近中心履約價，再向上/下各取 7 檔（共 15 檔，原為任意最近 10 檔）
+- 回傳新增 `implied_forward`：15 檔 F_K 平均值四捨五入至整數
+
+#### 預估結算價顯示
+- pnl-stats 第三行「預估結算價」改為顯示 `implied_forward` 實際計算值
+- 顏色使用 `#ffa657`（橘黃，與合成期貨欄一致），新增 `.stat-atm` CSS class
+- `main.py` payload 新增 `implied_forward` 欄位
+
+#### 圖表修正
+- 圖表 ATM 虛線標籤由「ATM」改為「價平」
+- grid top padding 從 20 → 40，修正標籤被裁切的問題
+
+---
+
 ## v3.9 (2026-03-30)
 
 ### 閃爍框行為修正、synthetic/pnl 補上 flash
