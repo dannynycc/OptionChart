@@ -780,12 +780,18 @@ def _bulk_request_series(full_series: str):
                 vol_str   = _req_thread(f"{full_sym}.TF-TotalVolume")
                 ratio_str = _req_thread(f"{full_sym}.TF-InOutRatio")
                 avg_str   = _req_thread(f"{full_sym}.TF-AvgPrice")
+                bid_str   = _req_thread(f"{full_sym}.TF-Bid")
+                ask_str   = _req_thread(f"{full_sym}.TF-Ask")
+                last_str  = _req_thread(f"{full_sym}.TF-Price")
                 new_vol   = int(float(vol_str)) if vol_str else 0
                 new_ratio = _to_float(ratio_str)
                 new_avg   = _to_float(avg_str)
                 # bg_poll 永遠送出，即使 vol=0，讓 main.py 更新 last_updated（盤後心跳用）
                 local_full.append({'symbol': full_sym, 'trade_volume': new_vol,
                                    'inout_ratio': new_ratio, 'avg_price': new_avg,
+                                   'bid_price': _to_float(bid_str),
+                                   'ask_price': _to_float(ask_str),
+                                   'last_price': _to_float(last_str),
                                    '_ratio': new_ratio, '_vol': new_vol})
 
                 # 日盤（獨立 REQUEST，非改名）

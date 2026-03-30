@@ -1,5 +1,33 @@
 # Changelog
 
+## v3.12 (2026-03-30)
+
+### 兩段式顯示修正、系列切換 UX 改善
+
+#### 問題
+- 服務剛啟動時畫面呈現「兩段式」：先跑出少量不完整資料，過一陣子才完整更新
+- 委買、委賣、成交價、合成期貨是第二階段才出現，點點消失後切入仍看不到這些欄位
+- 切換到已 live 的系列時，舊畫面殘留 3-4 秒才更新
+- 切換到未 live 的系列後，等點點消失仍停在空白畫面
+
+#### 根本原因
+- `calc_atm()` 在 `common` 為空時早返回只回 2 個值，但 `compute_payload()` 解包 3 個 → `ValueError` 導致每次廣播崩潰，是所有切換問題的主因
+- `_bulk_request_series` 只抓 `TotalVolume / InOutRatio / AvgPrice`，未抓 `Bid / Ask / Price`，導致 series-ready 時委買/委賣/成交價全為 0
+- `live` 旗標用 `_last_updated > 0` 判斷，snapshot 剛推完就變 true，bulk_req 尚未完成
+
+#### 修正
+- `core/calculator.py`：`calc_atm` 空 common 早返回改為 `return None, {}, None`（3 個值）
+- `xqfap_feed.py`：`_bulk_request_series` worker 新增抓 `TF-Bid / TF-Ask / TF-Price` 並帶入 POST payload，確保 series-ready 時所有欄位齊全
+- `main.py`：新增 `_series_ready: set`，`bulk_req` 完成後才標記 live；新增 `POST /api/series-ready` endpoint；`purge-series` 同步清除 ready 旗標
+- `xqfap_feed.py`：`_bulk_request_series` 完成後 POST `/api/series-ready`，通知 backend
+- `main.py`：`api_set_series` 計算完 payload 後廣播並在 HTTP response 一併回傳
+- `static/app.js`：`fetchContracts` 初始化時依 live 狀態決定是否清空等待（與 onchange 一致）
+- `static/app.js`：`handleData` 的 `_viewingNonLive` 守衛加入 `_contractsData.live` 確認，防止 bulk_req 完成前 WS 廣播誤觸發渲染
+- `static/app.js`：`_switchSeries` 改 async，POST 回應直接 render，不等下一次 WS 廣播
+- `static/app.js`：`_targetSeries / _currentActiveSeries` 原子置換防止舊 series 資料殘留
+
+---
+
 ## v3.11 (2026-03-30)
 
 ### 背景系列啟動加速
