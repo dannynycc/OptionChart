@@ -235,12 +235,15 @@ async def api_feed(updates: list[FeedItem], series: str = ""):
                 opt.trade_volume_day = u.trade_volume_day
             if u.avg_price > 0:
                 opt.avg_price = u.avg_price
-            if u.bid_price > 0:
+            if u.bid_price > 0 and opt.bid_price != u.bid_price:
                 opt.bid_price = u.bid_price
-            if u.ask_price > 0:
+                value_changed += 1
+            if u.ask_price > 0 and opt.ask_price != u.ask_price:
                 opt.ask_price = u.ask_price
-            if u.last_price > 0:
+                value_changed += 1
+            if u.last_price > 0 and opt.last_price != u.last_price:
                 opt.last_price = u.last_price
+                value_changed += 1
 
     if found > 0:
         _last_updated[series] = time.time()   # 有收到合約資料即更新（含盤後無變動）
@@ -276,8 +279,9 @@ async def api_get_session():
 async def api_set_futures_price(payload: dict):
     global _futures_price
     price = float(payload.get("price", 0))
-    if price > 0:
+    if price > 0 and price != _futures_price:
         _futures_price = price
+        await broadcast(compute_payload())
     return {"ok": True}
 
 @app.get("/api/active-series")

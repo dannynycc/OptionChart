@@ -137,6 +137,8 @@ _SWITCH_LISTENER_PORT = 8001    # main.py 切換系列時的 TCP 通知 port
 _BULK_REQ_THREADS    = 4        # bulk_request_series 並行 DDEML 連線數
 _bulk_req_sem        = threading.Semaphore(1)  # 限制同時只跑 1 個 bulk_req，防止 DDE 競爭
 _ADVISE_REQ_THREADS  = 4        # advise_worker 平行 DDE request threads
+_QUOTE_POLL_INTERVAL = 0.5      # 秒：Bid/Ask/Price 輪詢間隔（補足無成交時報價刷新）
+_QUOTE_POLL_THREADS  = 4        # 輪詢用 DDEML 連線數
 
 # 64-bit Windows：handle 是 64-bit pointer。
 # restype / argtypes 兩端都必須宣告，否則 ctypes 預設 c_int（32-bit）截斷。
@@ -222,6 +224,7 @@ _advise_loop_tid      = 0    # Win32 thread ID of advise message loop
 _pending_subscribe: set = set()  # 用 set 去重，避免重複 ADVSTART
 _pending_subscribe_lock   = threading.Lock()
 _last_callback_time: float = 0.0   # 最後收到 ADVDATA 的時間
+_quote_prevs: dict = {}            # symbol → (bid, ask, last)，供 quote_poll_worker 去重
 _last_resubscribe_time: float = 0.0  # 最後重新訂閱的時間
 _active_advise_series: str  = ''     # 目前持有 advise 的 full series
 _pending_switch_series: str = ''     # 待切換的 full series（series_watcher → advise_loop）
@@ -693,6 +696,51 @@ def _advise_worker():
                 _post_feed(batch, series)
             for day_series, batch in by_series_day.items():
                 _post_feed(batch, day_series)
+            _push_futures_price()
+
+
+def _quote_poll_worker():
+    """
+    定時輪詢 Bid/Ask/Price，補足 TotalVolume 未變動時的報價即時刷新。
+    每 _QUOTE_POLL_INTERVAL 秒，對 active series 全部合約並行 REQUEST 三個價格欄位，
+    與 _quote_prevs 比對，只推送有變化的合約。
+    """
+    logger.info("quote poll worker 啟動")
+
+    def _fetch_quote(symbol: str):
+        bid  = _to_float(_req_thread(f"{symbol}.TF-Bid"))
+        ask  = _to_float(_req_thread(f"{symbol}.TF-Ask"))
+        last = _to_float(_req_thread(f"{symbol}.TF-Price"))
+        return symbol, bid, ask, last
+
+    with ThreadPoolExecutor(max_workers=_QUOTE_POLL_THREADS,
+                            thread_name_prefix='quote_req') as executor:
+        while True:
+            time.sleep(_QUOTE_POLL_INTERVAL)
+            series = _active_advise_series
+            if not series:
+                continue
+            meta = _all_metas.get(series, {})
+            symbols = list(meta.keys())
+            if not symbols:
+                continue
+
+            futures = {executor.submit(_fetch_quote, sym): sym for sym in symbols}
+            changed = []
+            for fut in as_completed(futures):
+                try:
+                    symbol, bid, ask, last = fut.result()
+                except Exception:
+                    continue
+                prev = _quote_prevs.get(symbol)
+                if prev and prev[0] == bid and prev[1] == ask and prev[2] == last:
+                    continue
+                _quote_prevs[symbol] = (bid, ask, last)
+                changed.append({'symbol': symbol, 'trade_volume': 0,
+                                 'bid_price': bid, 'ask_price': ask, 'last_price': last})
+
+            if changed:
+                _post_feed(changed, series)
             _push_futures_price()
 
 
@@ -1447,6 +1495,7 @@ def main():
 
     threading.Thread(target=_auto_reinit_scheduler, daemon=True).start()
     threading.Thread(target=_advise_worker, daemon=True).start()
+    threading.Thread(target=_quote_poll_worker, daemon=True).start()
     threading.Thread(target=_switch_listener, daemon=True).start()
     threading.Thread(target=_series_watcher, daemon=True).start()
 

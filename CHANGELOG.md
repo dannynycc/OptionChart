@@ -1,5 +1,31 @@
 # Changelog
 
+## v3.7 (2026-03-30)
+
+### 委買委賣成交價即時刷新、T字表標題修正、價格格式化
+
+#### 委買/委賣/成交價即時刷新
+- 新增 `_quote_poll_worker`：每 0.5s 並行輪詢全部 active symbols 的 `TF-Bid`/`TF-Ask`/`TF-Price`
+  - 使用 4 條 DDEML thread 並行，與 `_quote_prevs` 比對只推有變化的合約
+  - 解決原本「無成交時 bid/ask/last 完全不刷新」的問題
+- `main.py` `/api/feed`：bid/ask/last 有實際變化時也遞增 `value_changed`，觸發廣播
+
+#### FITX 現價 / 合成期貨 F_K 改為每 0.5s 刷新
+- `_quote_poll_worker` 每輪結束後呼叫 `_push_futures_price()`
+- `/api/set-futures-price`：FITX 現價有變化時立即 `broadcast(compute_payload())`，F_K 隨之重算
+
+#### T字表標題修正（還原 v3.5 原始標題）
+- `外盤成交量(Buy Call)` / `內盤成交量(Sell Call)` 還原（v3.6 誤改為「買進/賣出」）
+- `成交量` 還原（v3.6 誤改為「成交」）
+- Put 側 `內盤成交量(Sell Put)` 移至 `外盤成交量(Buy Put)` 左側（左右對調）
+- 委買/委賣/成交價字色改為 `#8b949e`（與成交量一致）
+
+#### 價格格式化
+- 委買/委賣/成交價 ≥ 50 時顯示整數（去除小數點），< 50 保留一位小數
+- 新增 `_fmtPrice(v)` helper 統一處理六個價格欄位
+
+---
+
 ## v3.6 (2026-03-30)
 
 ### T字表新欄位、ATM 虛線、合成期貨、自動捲動修正

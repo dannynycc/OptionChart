@@ -377,6 +377,9 @@ function _cell(cls, text, flash) {
   d.textContent = text;
   return d;
 }
+function _fmtPrice(v) {
+  return v >= 50 ? String(Math.round(v)) : v.toFixed(1);
+}
 function _updateCell(el, cls, text, flash) {
   if (el.className !== cls) el.className = cls;
   if (el.textContent !== text) el.textContent = text;
@@ -451,18 +454,18 @@ function updateTable(rows) {
       _updateCell(c.call_vol,   'col-call-vol',   vc > 0 ? String(vc) : '',                          ch(vc,  'vc'));
       _updateCell(c.call_ratio, 'col-call-ratio', vc > 0 ? rc_.toFixed(2) : '',                      ch(rc_, 'rc_'));
       _updateCell(c.call_avg,   'col-call-avg',   r.avg_price_call > 0 ? r.avg_price_call.toFixed(1) : '', ch(r.avg_price_call, 'avg_c'));
-      _updateCell(c.call_bid,  'col-call-bid',   cbid  > 0 ? cbid.toFixed(1)  : '',                 ch(cbid,  'cbid'));
-      _updateCell(c.call_ask,  'col-call-ask',   cask  > 0 ? cask.toFixed(1)  : '',                 ch(cask,  'cask'));
-      _updateCell(c.call_last, 'col-call-last',  clast > 0 ? clast.toFixed(1) : '',                 ch(clast, 'clast'));
+      _updateCell(c.call_bid,  'col-call-bid',   cbid  > 0 ? _fmtPrice(cbid)  : '',                 ch(cbid,  'cbid'));
+      _updateCell(c.call_ask,  'col-call-ask',   cask  > 0 ? _fmtPrice(cask)  : '',                 ch(cask,  'cask'));
+      _updateCell(c.call_last, 'col-call-last',  clast > 0 ? _fmtPrice(clast) : '',                 ch(clast, 'clast'));
       _updateCell(c.call_val,   ncCls,            nc !== 0 ? nc.toFixed(0) : '',                     ch(nc,  'nc'));
       c.call_bar.firstChild.className = 'bar-call ' + (nc >= 0 ? 'positive' : 'negative');
       c.call_bar.firstChild.style.width = callPct + '%';
       c.put_bar.firstChild.className  = 'bar-put '  + (displayedNp >= 0 ? 'positive' : 'negative');
       c.put_bar.firstChild.style.width = putPct + '%';
       _updateCell(c.put_val,    npCls,            displayedNp !== 0 ? displayedNp.toFixed(0) : '',   ch(np,  'np'));
-      _updateCell(c.put_bid,   'col-put-bid',    pbid  > 0 ? pbid.toFixed(1)  : '',                 ch(pbid,  'pbid'));
-      _updateCell(c.put_ask,   'col-put-ask',    pask  > 0 ? pask.toFixed(1)  : '',                 ch(pask,  'pask'));
-      _updateCell(c.put_last,  'col-put-last',   plast > 0 ? plast.toFixed(1) : '',                 ch(plast, 'plast'));
+      _updateCell(c.put_bid,   'col-put-bid',    pbid  > 0 ? _fmtPrice(pbid)  : '',                 ch(pbid,  'pbid'));
+      _updateCell(c.put_ask,   'col-put-ask',    pask  > 0 ? _fmtPrice(pask)  : '',                 ch(pask,  'pask'));
+      _updateCell(c.put_last,  'col-put-last',   plast > 0 ? _fmtPrice(plast) : '',                 ch(plast, 'plast'));
       _updateCell(c.put_sell,   'col-put-sell',   bp > 0 ? String(bp) : '',                          ch(bp,  'bp'));
       _updateCell(c.put_buy,    'col-put-buy',    ap > 0 ? String(ap) : '',                          ch(ap,  'ap'));
       _updateCell(c.put_vol,    'col-put-vol',    vp > 0 ? String(vp) : '',                          ch(vp,  'vp'));
@@ -482,19 +485,19 @@ function updateTable(rows) {
       c.call_vol   = _cell('col-call-vol',   vc > 0 ? String(vc) : '',                          ch(vc,  'vc')  ? ' flash' : '');
       c.call_ratio = _cell('col-call-ratio', vc > 0 ? rc_.toFixed(2) : '',                      ch(rc_, 'rc_') ? ' flash' : '');
       c.call_avg   = _cell('col-call-avg',   r.avg_price_call > 0 ? r.avg_price_call.toFixed(1) : '', ch(r.avg_price_call, 'avg_c') ? ' flash' : '');
-      c.call_bid   = _cell('col-call-bid',   cbid  > 0 ? cbid.toFixed(1)  : '',                 ch(cbid,  'cbid')  ? ' flash' : '');
-      c.call_ask   = _cell('col-call-ask',   cask  > 0 ? cask.toFixed(1)  : '',                 ch(cask,  'cask')  ? ' flash' : '');
-      c.call_last  = _cell('col-call-last',  clast > 0 ? clast.toFixed(1) : '',                 ch(clast, 'clast') ? ' flash' : '');
+      c.call_bid   = _cell('col-call-bid',   cbid  > 0 ? _fmtPrice(cbid)  : '',                 ch(cbid,  'cbid')  ? ' flash' : '');
+      c.call_ask   = _cell('col-call-ask',   cask  > 0 ? _fmtPrice(cask)  : '',                 ch(cask,  'cask')  ? ' flash' : '');
+      c.call_last  = _cell('col-call-last',  clast > 0 ? _fmtPrice(clast) : '',                 ch(clast, 'clast') ? ' flash' : '');
       c.call_val   = _cell(ncCls,            nc !== 0 ? nc.toFixed(0) : '',                     ch(nc,  'nc')  ? ' flash' : '');
       c.call_bar   = _barCell('col-call-bar', 'bar-call ' + (nc >= 0 ? 'positive' : 'negative'), callPct);
       c.strike     = _cell('col-strike',     String(r.strike), '');
       c.put_bar    = _barCell('col-put-bar',  'bar-put '  + (displayedNp >= 0 ? 'positive' : 'negative'), putPct);
       c.put_val    = _cell(npCls,            displayedNp !== 0 ? displayedNp.toFixed(0) : '',   ch(np,  'np')  ? ' flash' : '');
-      c.put_bid    = _cell('col-put-bid',    pbid  > 0 ? pbid.toFixed(1)  : '',                 ch(pbid,  'pbid')  ? ' flash' : '');
-      c.put_ask    = _cell('col-put-ask',    pask  > 0 ? pask.toFixed(1)  : '',                 ch(pask,  'pask')  ? ' flash' : '');
-      c.put_last   = _cell('col-put-last',   plast > 0 ? plast.toFixed(1) : '',                 ch(plast, 'plast') ? ' flash' : '');
-      c.put_sell   = _cell('col-put-sell',   bp > 0 ? String(bp) : '',                          ch(bp,  'bp')  ? ' flash' : '');
+      c.put_bid    = _cell('col-put-bid',    pbid  > 0 ? _fmtPrice(pbid)  : '',                 ch(pbid,  'pbid')  ? ' flash' : '');
+      c.put_ask    = _cell('col-put-ask',    pask  > 0 ? _fmtPrice(pask)  : '',                 ch(pask,  'pask')  ? ' flash' : '');
+      c.put_last   = _cell('col-put-last',   plast > 0 ? _fmtPrice(plast) : '',                 ch(plast, 'plast') ? ' flash' : '');
       c.put_buy    = _cell('col-put-buy',    ap > 0 ? String(ap) : '',                          ch(ap,  'ap')  ? ' flash' : '');
+      c.put_sell   = _cell('col-put-sell',   bp > 0 ? String(bp) : '',                          ch(bp,  'bp')  ? ' flash' : '');
       c.put_vol    = _cell('col-put-vol',    vp > 0 ? String(vp) : '',                          ch(vp,  'vp')  ? ' flash' : '');
       c.put_ratio  = _cell('col-put-ratio',  vp > 0 ? rp_.toFixed(2) : '',                      ch(rp_, 'rp_') ? ' flash' : '');
       c.put_avg    = _cell('col-put-avg',    r.avg_price_put > 0 ? r.avg_price_put.toFixed(1) : '', ch(r.avg_price_put, 'avg_p') ? ' flash' : '');

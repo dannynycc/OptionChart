@@ -126,11 +126,11 @@ body {
 #table-header .col-call-avg,
 .row .col-call-avg   { width: 50px; text-align: right; padding-right: 2px;color: #79c0ff; font-size: 11px; }
 #table-header .col-call-bid,
-.row .col-call-bid   { width: 44px; text-align: right; padding-right: 2px; color: #3fb950; font-size: 11px; }
+.row .col-call-bid   { width: 44px; text-align: right; padding-right: 2px; color: #8b949e; font-size: 11px; }
 #table-header .col-call-ask,
-.row .col-call-ask   { width: 44px; text-align: right; padding-right: 2px; color: #f85149; font-size: 11px; }
+.row .col-call-ask   { width: 44px; text-align: right; padding-right: 2px; color: #8b949e; font-size: 11px; }
 #table-header .col-call-last,
-.row .col-call-last  { width: 50px; text-align: right; padding-right: 2px; color: #e3b341; font-size: 11px; }
+.row .col-call-last  { width: 50px; text-align: right; padding-right: 2px; color: #8b949e; font-size: 11px; }
 #table-header .col-call-buy,
 .row .col-call-buy   { width: 62px; text-align: right; padding-right: 2px;color: #3fb950; font-size: 11px; }
 #table-header .col-call-sell,
@@ -152,11 +152,11 @@ body {
 #table-header .col-put-avg,
 .row .col-put-avg    { width: 50px; text-align: right; padding-right: 2px; color: #79c0ff; font-size: 11px; }
 #table-header .col-put-bid,
-.row .col-put-bid    { width: 44px; text-align: right; padding-right: 2px; color: #3fb950; font-size: 11px; }
+.row .col-put-bid    { width: 44px; text-align: right; padding-right: 2px; color: #8b949e; font-size: 11px; }
 #table-header .col-put-ask,
-.row .col-put-ask    { width: 44px; text-align: right; padding-right: 2px; color: #f85149; font-size: 11px; }
+.row .col-put-ask    { width: 44px; text-align: right; padding-right: 2px; color: #8b949e; font-size: 11px; }
 #table-header .col-put-last,
-.row .col-put-last   { width: 50px; text-align: right; padding-right: 2px; color: #e3b341; font-size: 11px; }
+.row .col-put-last   { width: 50px; text-align: right; padding-right: 2px; color: #8b949e; font-size: 11px; }
 #table-header .col-put-val,
 .row .col-put-val    { width: 50px; text-align: right; padding-right: 2px; }
 #table-header .col-put-bar,
