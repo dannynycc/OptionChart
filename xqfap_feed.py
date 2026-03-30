@@ -385,7 +385,8 @@ def _req_thread(item: str) -> str:
 
 
 def _get_center_price() -> int:
-    val   = _req("FITX00.TF-Price")
+    # 優先 DDEML（精確小數），fallback pywin32（FITX00）
+    val   = _req_thread("FITXN*1.TF-Price") or _req("FITX00.TF-Price")
     price = _to_float(val)
     if price > 0:
         center = int(round(price / STRIKE_STEP) * STRIKE_STEP)
@@ -459,6 +460,25 @@ def _post_init(contracts: list, series: str, settlement_date: str = ""):
         logger.error(f"POST /api/init 失敗：{e}")
 
 
+def _push_futures_price(price: float = 0.0):
+    """推送 FITX*1 現價給 main.py，供 ATM 計算使用。
+    price 直接傳入時優先使用；
+    否則用 DDEML 讀 FITXN*1.TF-Price（精確小數，無 pywin32 截斷問題）。
+    """
+    try:
+        if price > 0:
+            val = price
+        else:
+            val = _to_float(_req_thread("FITXN*1.TF-Price"))
+        if val > 0:
+            requests.post(f"{SERVER_URL}/api/set-futures-price", json={"price": val}, timeout=2)
+            logger.info(f"FITX 現價推送：{val}")
+        else:
+            logger.warning("FITXN*1.TF-Price 回傳 0 或空值，略過推送")
+    except Exception as e:
+        logger.warning(f"_push_futures_price 失敗：{e}")
+
+
 def _post_feed(batch: list, series: str):
     try:
         r = requests.post(f"{SERVER_URL}/api/feed?series={series}", json=batch, timeout=5)
@@ -480,6 +500,9 @@ def _push_snapshot(meta: dict, series: str):
             'trade_volume': int(_to_float(_req(f"{symbol}.TF-TotalVolume")) or 0),
             'inout_ratio':  _to_float(_req(f"{symbol}.TF-InOutRatio")),
             'avg_price':    _to_float(_req_thread(f"{symbol}.TF-AvgPrice")),
+            'bid_price':    _to_float(_req_thread(f"{symbol}.TF-Bid")),
+            'ask_price':    _to_float(_req_thread(f"{symbol}.TF-Ask")),
+            'last_price':   _to_float(_req_thread(f"{symbol}.TF-Price")),
         })
     if snapshot:
         _post_feed(snapshot, series=series)
@@ -515,6 +538,7 @@ def _load_one_series(center: int, full_series: str, sd_str: str):
     _all_prevs[day_series]  = {}
     _push_snapshot(meta_full, full_series)
     _push_snapshot(meta_day,  day_series)
+    _push_futures_price(float(center))
     logger.info(f"載入完成：{full_series} / {day_series}")
     # 通知 advise 迴圈訂閱新系列
     with _pending_subscribe_lock:
@@ -589,13 +613,18 @@ def _fetch_one_changed(series: str, symbol: str, new_vol: int):
 
     ratio_str = _req_thread(f"{symbol}.TF-InOutRatio")
     avg_str   = _req_thread(f"{symbol}.TF-AvgPrice")
+    bid_str   = _req_thread(f"{symbol}.TF-Bid")
+    ask_str   = _req_thread(f"{symbol}.TF-Ask")
+    last_str  = _req_thread(f"{symbol}.TF-Price")
     new_ratio = _to_float(ratio_str)
     new_avg   = _to_float(avg_str)
     prev = _all_prevs.get(series)
     if prev is not None:
         prev[symbol] = (new_ratio, new_vol)
     full_item = {'series': series, 'symbol': symbol,
-                 'trade_volume': new_vol, 'inout_ratio': new_ratio, 'avg_price': new_avg}
+                 'trade_volume': new_vol, 'inout_ratio': new_ratio, 'avg_price': new_avg,
+                 'bid_price': _to_float(bid_str), 'ask_price': _to_float(ask_str),
+                 'last_price': _to_float(last_str)}
 
     day_item = None
     if has_day:
@@ -664,6 +693,7 @@ def _advise_worker():
                 _post_feed(batch, series)
             for day_series, batch in by_series_day.items():
                 _post_feed(batch, day_series)
+            _push_futures_price()
 
 
 def _bulk_request_series(full_series: str):
@@ -1401,6 +1431,7 @@ def main():
         if i == 0:  # 只對 active series 做初始快照；其餘由 bg_poll 第一輪更新
             _push_snapshot(meta_full, full_series)
             _push_snapshot(meta_day,  day_series)
+            _push_futures_price(float(center))
             # 立刻補一次 DDEML 全量（修正 AvgPrice 小數），不等 bg_poll 60s
             threading.Thread(target=_bulk_request_series,
                              args=(full_series,), daemon=True).start()

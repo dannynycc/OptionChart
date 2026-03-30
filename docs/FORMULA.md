@@ -39,9 +39,18 @@
 淨PUT[i]  = ROUND((InOutRatio[i] - 50) / 50 * TotalVolume[i], 0)
 ```
 
-- InOutRatio > 50 → 偏買方 → 正值
-- InOutRatio < 50 → 偏賣方 → 負值
+- InOutRatio > 50 → 外盤 > 內盤 → 主動買方為主 → 正值
+- InOutRatio < 50 → 內盤 > 外盤 → 主動賣方為主 → 負值
 - 視覺化方式：**波浪狀面積區域**（非柱狀圖）
+
+### 淨口數與多空方向的關係
+
+淨口數本身**不直接等於多空方向**，需搭配 Call/Put 判斷：
+
+| | net_position > 0（外盤強） | net_position < 0（內盤強） |
+|---|---|---|
+| **Call** | 主動買 Call → 押漲 | 主動賣 Call → 押跌或中性 |
+| **Put**  | 主動買 Put → 押跌 | 主動賣 Put → 押漲或中性 |
 
 Python 換算（from fubon API）：
 ```python

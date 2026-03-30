@@ -1,5 +1,39 @@
 # Changelog
 
+## v3.6 (2026-03-30)
+
+### T字表新欄位、ATM 虛線、合成期貨、自動捲動修正
+
+#### T字表欄位擴充
+- **Call / Put 各新增三欄**：`委買`（Bid）、`委賣`（Ask）、`成交價`（即時 last price）
+  - 使用 DDEML（`_req_thread`）讀取以取得正確小數精度，修正 pywin32 截斷問題
+  - 欄位顏色：委買綠、委賣紅、成交價橙
+- **欄位標題調整**：外盤/內盤成交量改為「買進 (Call/Put)」、「賣出 (Call/Put)」
+
+#### ATM 價平虛線
+- 右側損益圖加入橙色垂直虛線，標示當下 ATM 履約價
+- 僅首次載入或切換合約時自動捲動 T字表至 ATM 位置，之後不強制拉回
+
+#### 合成期貨欄位
+- T字表新增 `合成期貨 (F_K)` 欄，僅顯示參與 ATM 計算的 10 個履約價
+- `F_K = K + C(K) - P(K)`，Put-Call Parity 合成期貨價格
+
+#### ATM 計算演算法修正
+- **選擇權價格來源修正**：改用 `(bid + ask) / 2`（market maker 在線時）或 `last_price`（夜盤/結算日），不再使用日內加權均價 `avg_price`
+  - 修正後 F_K 各履約價收斂至 ~1 點內；修正前因 avg_price 混入不同時間成交，散布達 ~60 點
+- **ATM 中心計算**：改用 FITX\*1 即時現價（`FITXN*1.TF-Price` via DDEML）為中心，取最近 10 檔；FITX\*1 未就緒時自動 two-step fallback（先對全部 common strikes 算出 rough implied forward 再取 10 檔）
+- `calc_atm()` 回傳值改為 `(atm_strike, synthetic_map)` tuple
+- `build_strike_table()` 新增 `synthetic_map` 參數，輸出 `synthetic_futures` 欄位
+
+#### FITX 現價推送機制
+- `xqfap_feed` 每批次結束後推送 FITX\*1 現價至 `/api/set-futures-price`（新端點）
+- `_get_center_price()` 改用 DDEML 讀取 `FITXN*1.TF-Price`（精確），fallback pywin32 `FITX00`
+- 修正：推送點從廢棄的 `_load_one_series` 移至實際 main flow（line 1431）
+
+**變更檔案**：`core/calculator.py`、`main.py`、`xqfap_feed.py`、`static/app.js`、`static/index.html`、`static/style.css`
+
+---
+
 ## v3.5 (2026-03-27)
 
 ### UI 顏色與閃爍動畫微調

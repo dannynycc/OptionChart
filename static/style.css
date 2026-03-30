@@ -102,7 +102,8 @@ body {
 #table-header .col-put-sell,
 #table-header .col-pnl-call,
 #table-header .col-pnl-put,
-#table-header .col-pnl-combined {
+#table-header .col-pnl-combined,
+#table-header .col-synthetic {
   white-space: normal;
   font-size: 9px;
   line-height: 1.25;
@@ -124,6 +125,12 @@ body {
 .row .col-call-val   { width: 50px; text-align: right; padding-right: 2px;}
 #table-header .col-call-avg,
 .row .col-call-avg   { width: 50px; text-align: right; padding-right: 2px;color: #79c0ff; font-size: 11px; }
+#table-header .col-call-bid,
+.row .col-call-bid   { width: 44px; text-align: right; padding-right: 2px; color: #3fb950; font-size: 11px; }
+#table-header .col-call-ask,
+.row .col-call-ask   { width: 44px; text-align: right; padding-right: 2px; color: #f85149; font-size: 11px; }
+#table-header .col-call-last,
+.row .col-call-last  { width: 50px; text-align: right; padding-right: 2px; color: #e3b341; font-size: 11px; }
 #table-header .col-call-buy,
 .row .col-call-buy   { width: 62px; text-align: right; padding-right: 2px;color: #3fb950; font-size: 11px; }
 #table-header .col-call-sell,
@@ -144,10 +151,18 @@ body {
 .row .col-put-sell   { width: 62px; text-align: right; padding-right: 2px; color: #3fb950; font-size: 11px; }
 #table-header .col-put-avg,
 .row .col-put-avg    { width: 50px; text-align: right; padding-right: 2px; color: #79c0ff; font-size: 11px; }
+#table-header .col-put-bid,
+.row .col-put-bid    { width: 44px; text-align: right; padding-right: 2px; color: #3fb950; font-size: 11px; }
+#table-header .col-put-ask,
+.row .col-put-ask    { width: 44px; text-align: right; padding-right: 2px; color: #f85149; font-size: 11px; }
+#table-header .col-put-last,
+.row .col-put-last   { width: 50px; text-align: right; padding-right: 2px; color: #e3b341; font-size: 11px; }
 #table-header .col-put-val,
 .row .col-put-val    { width: 50px; text-align: right; padding-right: 2px; }
 #table-header .col-put-bar,
 .row .col-put-bar    { width: 80px; }
+#table-header .col-synthetic,
+.row .col-synthetic     { width: 65px; text-align: right; padding-right: 4px; color: #ffa657; font-size: 11px; }
 #table-header .col-pnl-call,
 .row .col-pnl-call      { width: 60px; text-align: right; padding-right: 2px;color: #79c0ff; font-size: 11px; }
 #table-header .col-pnl-put,

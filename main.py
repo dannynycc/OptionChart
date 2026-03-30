@@ -19,7 +19,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
-from core.calculator import OptionData, calc_combined_pnl, build_strike_table
+from core.calculator import OptionData, calc_combined_pnl, build_strike_table, calc_atm
 
 logging.basicConfig(
     level=logging.INFO,
@@ -48,6 +48,7 @@ _last_updated:     dict  = {}   # series → float timestamp
 _contracts_cache:  list  = []   # 前端下拉選單資料
 _connected:        bool  = False
 _session_mode:     str   = "full"
+_futures_price:    float = 0.0    # FITX*1 即時現價（由 xqfap_feed 定期推送）
 
 clients: set[WebSocket] = set()
 _ws_connect_count: int = 0   # 累計 WS 連線次數（刷新頁面會 +1）
@@ -61,13 +62,15 @@ def compute_payload() -> dict:
         calls = [v for v in active.values() if v.side == 'C']
         puts  = [v for v in active.values() if v.side == 'P']
     pnl_result       = calc_combined_pnl(calls, puts)
-    table            = build_strike_table(calls, puts)
+    atm_strike, synthetic_map = calc_atm(calls, puts, center_price=_futures_price)
+    table            = build_strike_table(calls, puts, current_index=atm_strike, synthetic_map=synthetic_map)
     last_updated     = _last_updated.get(active_key, 0.0)
     subscribed_count = _subscribed_counts.get(active_key, 0)
     settlement       = _settlement_dates.get(active_key, "")
     return {
         "table":      table,
         "pnl":        pnl_result,
+        "atm_strike": atm_strike,
         "settlement": settlement,
         "status": {
             "connected":        _connected,
@@ -189,6 +192,9 @@ class FeedItem(BaseModel):
     bid_match_day:    int   = -1
     ask_match_day:    int   = -1
     trade_volume_day: int   = -1
+    bid_price:        float = 0.0
+    ask_price:        float = 0.0
+    last_price:       float = 0.0
 
 @app.post("/api/feed")
 async def api_feed(updates: list[FeedItem], series: str = ""):
@@ -229,6 +235,12 @@ async def api_feed(updates: list[FeedItem], series: str = ""):
                 opt.trade_volume_day = u.trade_volume_day
             if u.avg_price > 0:
                 opt.avg_price = u.avg_price
+            if u.bid_price > 0:
+                opt.bid_price = u.bid_price
+            if u.ask_price > 0:
+                opt.ask_price = u.ask_price
+            if u.last_price > 0:
+                opt.last_price = u.last_price
 
     if found > 0:
         _last_updated[series] = time.time()   # 有收到合約資料即更新（含盤後無變動）
@@ -259,6 +271,14 @@ async def api_set_session(payload: SessionModePayload):
 @app.get("/api/get-session")
 async def api_get_session():
     return {"mode": _session_mode}
+
+@app.post("/api/set-futures-price")
+async def api_set_futures_price(payload: dict):
+    global _futures_price
+    price = float(payload.get("price", 0))
+    if price > 0:
+        _futures_price = price
+    return {"ok": True}
 
 @app.get("/api/active-series")
 async def api_active_series():
@@ -359,6 +379,7 @@ async def api_debug():
         "threads":          threading.active_count(),
         "last_updated":     dict(_last_updated),
         "ws_connect_count": _ws_connect_count,
+        "futures_price":    _futures_price,
     }
 
 @app.get("/")

@@ -21,6 +21,9 @@ class OptionData:
     ask_match_day: int = -1
     avg_price: float = 0.0
     prev_close: float = 0.0  # 備用：盤後 avgPrice 為空時用前日收盤價
+    bid_price: float = 0.0   # 委買一（Bid，即時掛單）
+    ask_price: float = 0.0   # 委賣一（Ask，即時掛單）
+    last_price: float = 0.0  # 即時成交價（Price，最近一筆）
 
     @property
     def avg_premium(self) -> float:
@@ -68,6 +71,62 @@ def parse_side(name: str) -> str:
     if '賣權' in name:
         return 'P'
     return '?'
+
+
+def _effective_price(o: OptionData) -> float:
+    """
+    選擇權即時有效價格，用於 Put-Call Parity：
+    - 優先用 (bid + ask) / 2（market maker 在線時最準確）
+    - bid/ask 任一為 0 時（market maker 下線），改用即時成交價 last_price
+    - 兩者皆無時回傳 0（排除此履約價）
+    """
+    if o.bid_price > 0 and o.ask_price > 0:
+        return (o.bid_price + o.ask_price) / 2
+    if o.last_price > 0:
+        return o.last_price
+    return 0.0
+
+
+def calc_atm(
+    calls: list[OptionData],
+    puts: list[OptionData],
+    center_price: Optional[float] = None,
+) -> tuple[Optional[int], dict[int, float]]:
+    """
+    用 Put-Call Parity 估算合成期貨價格。
+    F_K = K + C(K) - P(K)
+
+    選擇權價格取法（_effective_price）：
+      - market maker 在線：(bid + ask) / 2
+      - market maker 下線（夜盤 2AM 後 / 結算日 12:30 後）：last_price
+
+    中心判斷（依優先序）：
+      1. center_price（FITX*1 現價，由外部傳入）
+      2. 若 center_price 無效，先對所有 common strikes 算出粗略 implied forward，
+         再以 implied forward 為中心取最近 10 檔（two-step）
+
+    回傳：
+      (atm_strike, synthetic_map)
+      synthetic_map = {履約價: F_K}，僅含參與計算的 10 檔
+    """
+    call_map = {c.strike: _effective_price(c) for c in calls if _effective_price(c) > 0}
+    put_map  = {p.strike: _effective_price(p) for p in puts  if _effective_price(p) > 0}
+    common   = sorted(set(call_map) & set(put_map))
+    if not common:
+        return None, {}
+
+    if center_price and center_price > 0:
+        center = center_price
+    else:
+        # Two-step：先用全部 common strikes 估算 implied forward 作為中心
+        rough_implied = sum(k + call_map[k] - put_map[k] for k in common) / len(common)
+        center = rough_implied
+
+    nearest = sorted(common, key=lambda k: abs(k - center))[:10]
+    synthetic_map = {k: round(k + call_map[k] - put_map[k], 1) for k in nearest}
+    implied = sum(synthetic_map.values()) / len(synthetic_map)
+    atm     = min(common, key=lambda k: abs(k - implied))
+    return atm, synthetic_map
 
 
 def calc_combined_pnl(
@@ -143,6 +202,7 @@ def build_strike_table(
     calls: list[OptionData],
     puts: list[OptionData],
     current_index: Optional[int] = None,
+    synthetic_map: Optional[dict] = None,
 ) -> list[dict]:
     """
     組合左側 T 字報價表資料，供前端渲染。
@@ -201,9 +261,15 @@ def build_strike_table(
             "avg_price_call": round(c.avg_premium, 2) if c else 0.0,
             "ask_match_call": c.ask_match if c else 0,
             "bid_match_call": c.bid_match if c else 0,
+            "bid_price_call":  round(c.bid_price,  1) if c else 0.0,
+            "ask_price_call":  round(c.ask_price,  1) if c else 0.0,
+            "last_price_call": round(c.last_price, 1) if c else 0.0,
             "avg_price_put":  round(p.avg_premium, 2) if p else 0.0,
             "ask_match_put":  p.ask_match if p else 0,
             "bid_match_put":  p.bid_match if p else 0,
+            "bid_price_put":  round(p.bid_price,  1) if p else 0.0,
+            "ask_price_put":  round(p.ask_price,  1) if p else 0.0,
+            "last_price_put": round(p.last_price, 1) if p else 0.0,
             # 純日盤
             "net_call_day":      c_net_day,
             "vol_call_day":      c_vol_day,
@@ -220,5 +286,7 @@ def build_strike_table(
             "pnl_call":     round(call_pnl,     4),
             "pnl_put":      round(put_pnl,      4),
             "pnl_combined": round(combined_pnl, 4),
+            # 合成期貨（Put-Call Parity，僅參與 ATM 計算的 10 檔有值）
+            "synthetic_futures": synthetic_map.get(strike) if synthetic_map else None,
         })
     return rows

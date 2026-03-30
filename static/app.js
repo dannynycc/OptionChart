@@ -10,6 +10,8 @@ const chart    = echarts.init(chartDom, 'dark');
 // 全域：供插值 + hover 使用
 let _chartStrikes = [];
 let _chartPnl     = [];   // 單位：萬元
+let _atmStrike    = null; // 當前 ATM 履約價
+let _tableScrolled = false; // 是否已完成首次自動捲動
 
 function _interpolate(x) {
   if (_chartStrikes.length === 0) return null;
@@ -251,6 +253,31 @@ function _initSlider(minS, maxS, forceReset = false) {
   _sliderMax = maxS;
 }
 
+// ── ATM 垂直虛線 ───────────────────────────────────────
+function updateATMLine(atmStrike) {
+  _atmStrike = atmStrike;
+  if (!atmStrike) return;
+  chart.setOption({
+    series: [{
+      name: '合併損益',
+      markLine: {
+        silent: true,
+        symbol: 'none',
+        lineStyle: { color: '#ffa657', type: 'dashed', width: 1.5 },
+        label: {
+          show: true,
+          position: 'end',
+          formatter: `ATM\n${atmStrike}`,
+          color: '#ffa657',
+          fontSize: 11,
+          fontWeight: 'bold',
+        },
+        data: [{ xAxis: atmStrike }],
+      },
+    }],
+  }, false);
+}
+
 // ── 更新右側損益圖 ─────────────────────────────────────
 function updateChart(pnl, forceReset = false) {
   if (!pnl || !pnl.strikes || pnl.strikes.length === 0) return;
@@ -396,6 +423,8 @@ function updateTable(rows) {
     const rc_ = gC(r, 'ratio_call'), rp_ = gC(r, 'ratio_put');
     const ac  = gC(r, 'ask_match_call'), bc = gC(r, 'bid_match_call');
     const ap  = gC(r, 'ask_match_put'),  bp = gC(r, 'bid_match_put');
+    const cbid = gC(r, 'bid_price_call'),  cask = gC(r, 'ask_price_call'),  clast = gC(r, 'last_price_call');
+    const pbid = gC(r, 'bid_price_put'),   pask = gC(r, 'ask_price_put'),   plast = gC(r, 'last_price_put');
 
     const displayedNp = np;
     const callPct = (Math.abs(nc)          / maxAbsNet * 50).toFixed(1);
@@ -406,8 +435,8 @@ function updateTable(rows) {
 
     const prev = prevValues[key] || {};
     const ch = (v, k) => prev[k] !== v;
-    prevValues[key] = { nc, vc, rc_, avg_c: r.avg_price_call, ac, bc,
-                        np, vp, rp_, avg_p: r.avg_price_put,  ap, bp };
+    prevValues[key] = { nc, vc, rc_, avg_c: r.avg_price_call, ac, bc, cbid, cask, clast,
+                        np, vp, rp_, avg_p: r.avg_price_put,  ap, bp, pbid, pask, plast };
 
     const ncCls = 'col-call-val' + (nc > 0 ? ' val-pos' : nc < 0 ? ' val-neg' : '');
     const npCls = 'col-put-val'  + (displayedNp > 0 ? ' val-pos' : displayedNp < 0 ? ' val-neg' : '');
@@ -422,17 +451,24 @@ function updateTable(rows) {
       _updateCell(c.call_vol,   'col-call-vol',   vc > 0 ? String(vc) : '',                          ch(vc,  'vc'));
       _updateCell(c.call_ratio, 'col-call-ratio', vc > 0 ? rc_.toFixed(2) : '',                      ch(rc_, 'rc_'));
       _updateCell(c.call_avg,   'col-call-avg',   r.avg_price_call > 0 ? r.avg_price_call.toFixed(1) : '', ch(r.avg_price_call, 'avg_c'));
+      _updateCell(c.call_bid,  'col-call-bid',   cbid  > 0 ? cbid.toFixed(1)  : '',                 ch(cbid,  'cbid'));
+      _updateCell(c.call_ask,  'col-call-ask',   cask  > 0 ? cask.toFixed(1)  : '',                 ch(cask,  'cask'));
+      _updateCell(c.call_last, 'col-call-last',  clast > 0 ? clast.toFixed(1) : '',                 ch(clast, 'clast'));
       _updateCell(c.call_val,   ncCls,            nc !== 0 ? nc.toFixed(0) : '',                     ch(nc,  'nc'));
       c.call_bar.firstChild.className = 'bar-call ' + (nc >= 0 ? 'positive' : 'negative');
       c.call_bar.firstChild.style.width = callPct + '%';
       c.put_bar.firstChild.className  = 'bar-put '  + (displayedNp >= 0 ? 'positive' : 'negative');
       c.put_bar.firstChild.style.width = putPct + '%';
       _updateCell(c.put_val,    npCls,            displayedNp !== 0 ? displayedNp.toFixed(0) : '',   ch(np,  'np'));
+      _updateCell(c.put_bid,   'col-put-bid',    pbid  > 0 ? pbid.toFixed(1)  : '',                 ch(pbid,  'pbid'));
+      _updateCell(c.put_ask,   'col-put-ask',    pask  > 0 ? pask.toFixed(1)  : '',                 ch(pask,  'pask'));
+      _updateCell(c.put_last,  'col-put-last',   plast > 0 ? plast.toFixed(1) : '',                 ch(plast, 'plast'));
       _updateCell(c.put_sell,   'col-put-sell',   bp > 0 ? String(bp) : '',                          ch(bp,  'bp'));
       _updateCell(c.put_buy,    'col-put-buy',    ap > 0 ? String(ap) : '',                          ch(ap,  'ap'));
       _updateCell(c.put_vol,    'col-put-vol',    vp > 0 ? String(vp) : '',                          ch(vp,  'vp'));
       _updateCell(c.put_ratio,  'col-put-ratio',  vp > 0 ? rp_.toFixed(2) : '',                      ch(rp_, 'rp_'));
       _updateCell(c.put_avg,    'col-put-avg',    r.avg_price_put > 0 ? r.avg_price_put.toFixed(1) : '', ch(r.avg_price_put, 'avg_p'));
+      c.synthetic.textContent    = r.synthetic_futures != null ? r.synthetic_futures.toFixed(1) : '';
       c.pnl_call.textContent     = r.pnl_call     != null ? r.pnl_call.toFixed(4)     : '';
       c.pnl_put.textContent      = r.pnl_put      != null ? r.pnl_put.toFixed(4)      : '';
       c.pnl_combined.textContent = r.pnl_combined != null ? r.pnl_combined.toFixed(4) : '';
@@ -446,16 +482,23 @@ function updateTable(rows) {
       c.call_vol   = _cell('col-call-vol',   vc > 0 ? String(vc) : '',                          ch(vc,  'vc')  ? ' flash' : '');
       c.call_ratio = _cell('col-call-ratio', vc > 0 ? rc_.toFixed(2) : '',                      ch(rc_, 'rc_') ? ' flash' : '');
       c.call_avg   = _cell('col-call-avg',   r.avg_price_call > 0 ? r.avg_price_call.toFixed(1) : '', ch(r.avg_price_call, 'avg_c') ? ' flash' : '');
+      c.call_bid   = _cell('col-call-bid',   cbid  > 0 ? cbid.toFixed(1)  : '',                 ch(cbid,  'cbid')  ? ' flash' : '');
+      c.call_ask   = _cell('col-call-ask',   cask  > 0 ? cask.toFixed(1)  : '',                 ch(cask,  'cask')  ? ' flash' : '');
+      c.call_last  = _cell('col-call-last',  clast > 0 ? clast.toFixed(1) : '',                 ch(clast, 'clast') ? ' flash' : '');
       c.call_val   = _cell(ncCls,            nc !== 0 ? nc.toFixed(0) : '',                     ch(nc,  'nc')  ? ' flash' : '');
       c.call_bar   = _barCell('col-call-bar', 'bar-call ' + (nc >= 0 ? 'positive' : 'negative'), callPct);
       c.strike     = _cell('col-strike',     String(r.strike), '');
       c.put_bar    = _barCell('col-put-bar',  'bar-put '  + (displayedNp >= 0 ? 'positive' : 'negative'), putPct);
       c.put_val    = _cell(npCls,            displayedNp !== 0 ? displayedNp.toFixed(0) : '',   ch(np,  'np')  ? ' flash' : '');
+      c.put_bid    = _cell('col-put-bid',    pbid  > 0 ? pbid.toFixed(1)  : '',                 ch(pbid,  'pbid')  ? ' flash' : '');
+      c.put_ask    = _cell('col-put-ask',    pask  > 0 ? pask.toFixed(1)  : '',                 ch(pask,  'pask')  ? ' flash' : '');
+      c.put_last   = _cell('col-put-last',   plast > 0 ? plast.toFixed(1) : '',                 ch(plast, 'plast') ? ' flash' : '');
       c.put_sell   = _cell('col-put-sell',   bp > 0 ? String(bp) : '',                          ch(bp,  'bp')  ? ' flash' : '');
       c.put_buy    = _cell('col-put-buy',    ap > 0 ? String(ap) : '',                          ch(ap,  'ap')  ? ' flash' : '');
       c.put_vol    = _cell('col-put-vol',    vp > 0 ? String(vp) : '',                          ch(vp,  'vp')  ? ' flash' : '');
       c.put_ratio  = _cell('col-put-ratio',  vp > 0 ? rp_.toFixed(2) : '',                      ch(rp_, 'rp_') ? ' flash' : '');
       c.put_avg    = _cell('col-put-avg',    r.avg_price_put > 0 ? r.avg_price_put.toFixed(1) : '', ch(r.avg_price_put, 'avg_p') ? ' flash' : '');
+      c.synthetic    = _cell('col-synthetic',    r.synthetic_futures != null ? r.synthetic_futures.toFixed(1) : '', '');
       c.pnl_call    = _cell('col-pnl-call',     r.pnl_call     != null ? r.pnl_call.toFixed(4)     : '', '');
       c.pnl_put     = _cell('col-pnl-put',      r.pnl_put      != null ? r.pnl_put.toFixed(4)      : '', '');
       c.pnl_combined = _cell('col-pnl-combined', r.pnl_combined != null ? r.pnl_combined.toFixed(4) : '', '');
@@ -474,10 +517,13 @@ function updateTable(rows) {
     }
   }
 
-  // 自動捲動到高亮列
-  const highlighted = body.querySelector('.highlight');
-  if (highlighted) {
-    highlighted.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  // 只在首次載入時自動捲動到高亮列，之後不強制拉回
+  if (!_tableScrolled) {
+    const highlighted = body.querySelector('.highlight');
+    if (highlighted) {
+      highlighted.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      _tableScrolled = true;
+    }
   }
 }
 
@@ -490,6 +536,7 @@ function _clearDisplay() {
   const tb = document.getElementById('strike-table-body');
   tb.textContent = '';
   tb._rowMap = {};
+  _tableScrolled = false;
   _chartStrikes = [];
   _chartPnl     = [];
   const statsEl = document.getElementById('pnl-stats');
@@ -708,6 +755,7 @@ function handleData(data, source) {
   }
   updateTable(data.table);
   updateChart(data.pnl, modeChanged);
+  if (data.atm_strike) updateATMLine(data.atm_strike);
   updateStatus(data.status, data.settlement);
 }
 
