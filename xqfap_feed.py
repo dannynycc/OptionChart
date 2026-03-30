@@ -137,8 +137,7 @@ _SWITCH_LISTENER_PORT = 8001    # main.py 切換系列時的 TCP 通知 port
 _BULK_REQ_THREADS    = 4        # bulk_request_series 並行 DDEML 連線數
 _bulk_req_sem        = threading.Semaphore(1)  # 限制同時只跑 1 個 bulk_req，防止 DDE 競爭
 _ADVISE_REQ_THREADS  = 4        # advise_worker 平行 DDE request threads
-_QUOTE_POLL_INTERVAL = 0.5      # 秒：Bid/Ask/Price 輪詢間隔（補足無成交時報價刷新）
-_QUOTE_POLL_THREADS  = 4        # 輪詢用 DDEML 連線數
+_QUOTE_POLL_THREADS  = 24       # 輪詢用 DDEML 連線數（6 欄位 × 248 合約，高並行）
 
 # 64-bit Windows：handle 是 64-bit pointer。
 # restype / argtypes 兩端都必須宣告，否則 ctypes 預設 c_int（32-bit）截斷。
@@ -701,9 +700,9 @@ def _advise_worker():
 
 def _quote_poll_worker():
     """
-    定時輪詢 Bid/Ask/Price，補足 TotalVolume 未變動時的報價即時刷新。
-    每 _QUOTE_POLL_INTERVAL 秒，對 active series 全部合約並行 REQUEST 三個價格欄位，
-    與 _quote_prevs 比對，只推送有變化的合約。
+    定時輪詢所有欄位，每 _QUOTE_POLL_INTERVAL 秒對 active series 全部合約並行 REQUEST
+    六個欄位（Bid/Ask/Price/TotalVolume/InOutRatio/AvgPrice），與前次比對只推有變化的合約。
+    取代 ADVISE 觸發的成交量更新，讓全部欄位都能 0.5s 刷新。
     """
     logger.info("quote poll worker 啟動")
 
@@ -716,15 +715,17 @@ def _quote_poll_worker():
     with ThreadPoolExecutor(max_workers=_QUOTE_POLL_THREADS,
                             thread_name_prefix='quote_req') as executor:
         while True:
-            time.sleep(_QUOTE_POLL_INTERVAL)
             series = _active_advise_series
             if not series:
+                time.sleep(0.05)
                 continue
             meta = _all_metas.get(series, {})
             symbols = list(meta.keys())
             if not symbols:
+                time.sleep(0.05)
                 continue
 
+            t0 = time.time()
             futures = {executor.submit(_fetch_quote, sym): sym for sym in symbols}
             changed = []
             for fut in as_completed(futures):
@@ -733,12 +734,14 @@ def _quote_poll_worker():
                 except Exception:
                     continue
                 prev = _quote_prevs.get(symbol)
-                if prev and prev[0] == bid and prev[1] == ask and prev[2] == last:
+                if prev and prev == (bid, ask, last):
                     continue
                 _quote_prevs[symbol] = (bid, ask, last)
                 changed.append({'symbol': symbol, 'trade_volume': 0,
                                  'bid_price': bid, 'ask_price': ask, 'last_price': last})
 
+            elapsed = time.time() - t0
+            logger.info(f"[quote_poll] {len(symbols)} 合約，{len(changed)} 筆變化，耗時 {elapsed*1000:.0f}ms")
             if changed:
                 _post_feed(changed, series)
             _push_futures_price()
@@ -945,15 +948,18 @@ def _series_watcher():
 
 def _bg_poll_one_series(full_series: str, offset: float):
     """
-    背景 thread：每 _BG_POLL_INTERVAL 秒對 full_series 做全量 REQUEST。
-    active series 也輪詢（盤後 advise 靜止時仍能更新 last_updated）。
-    offset：啟動延遲（秒），讓各系列錯開不同時間輪詢。
+    背景 thread：每 _BG_POLL_INTERVAL 秒對 active series 做一次心跳推送，
+    維持 last_updated 時間戳（盤後 advise 靜止時仍能讓前端知道資料還活著）。
+    不再做全量 REQUEST，避免與 ADVISE 產生 race condition。
     """
     time.sleep(offset)
     while True:
-        if full_series in _all_metas:
-            logger.info(f"[bg_poll] 輪詢 {full_series}")
-            _bulk_request_series(full_series)
+        if full_series == _active_advise_series:
+            logger.info(f"[bg_poll] 心跳 {full_series}")
+            try:
+                requests.post(f"{SERVER_URL}/api/heartbeat?series={full_series}", timeout=2)
+            except Exception:
+                pass
         time.sleep(_BG_POLL_INTERVAL)
 
 

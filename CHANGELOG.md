@@ -1,5 +1,26 @@
 # Changelog
 
+## v3.8 (2026-03-30)
+
+### 全欄位更新架構重整、race condition 修正
+
+#### 架構調整
+- `_quote_poll_worker` 回歸只輪詢 Bid/Ask/Price（3 欄），避免與 ADVISE 路徑競爭成交量欄位
+- `_QUOTE_POLL_THREADS` 提升至 24，移除 `_QUOTE_POLL_INTERVAL` sleep，讓工作本身作天然節流（實際間隔 ~350ms）
+- `_bg_poll_one_series` 改為純心跳（POST `/api/heartbeat`），不再做全量 REQUEST，消除 bulk_req 造成的 stale data 覆蓋問題
+- 新增 `/api/heartbeat` 端點，僅更新 `last_updated` 時間戳不觸發廣播
+
+#### Race condition 修正
+- 修正 `_bg_poll_one_series` / `_bulk_request_series` 長達 4~5s 的全量輪詢與 ADVISE 路徑互相覆蓋，導致成交量偶爾短暫跳回舊值的 bug
+- 修正 `main.py` `/api/feed`：`trade_volume=0`（quote-only 更新）時完全跳過 inout_ratio / bid_match / ask_match 重算，避免因整數反算造成 InOutRatio 誤差 flash
+
+#### 現況更新頻率
+- 委買/委賣/成交價：~350ms（quote_poll 輪詢）
+- 成交量/內外盤比/均價/淨CALL/淨PUT/損益曲線：即時（ADVISE 有成交即觸發）
+- 合成期貨 F_K / FITX 現價：~350ms（quote_poll 每輪結束後推送）
+
+---
+
 ## v3.7 (2026-03-30)
 
 ### 委買委賣成交價即時刷新、T字表標題修正、價格格式化

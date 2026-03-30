@@ -212,23 +212,25 @@ async def api_feed(updates: list[FeedItem], series: str = ""):
                 continue
             found += 1
             opt     = target[u.symbol]
-            old_ratio = opt.inout_ratio
-            old_vol   = opt.trade_volume
-            new_vol   = u.trade_volume if u.trade_volume > 0 else old_vol
-            if u.inout_ratio >= 0:
-                new_ratio = u.inout_ratio
-                new_bid   = round(new_ratio / 100 * new_vol)
-                new_ask   = new_vol - new_bid
-            else:
-                new_bid   = u.bid_match if u.bid_match >= 0 else opt.bid_match
-                new_ask   = u.ask_match if u.ask_match >= 0 else opt.ask_match
-                new_ratio = new_bid / new_vol * 100 if new_vol > 0 else 50.0
-            if new_ratio != old_ratio or new_vol != old_vol:
-                opt.inout_ratio  = new_ratio
-                opt.trade_volume = new_vol
-                opt.bid_match    = new_bid
-                opt.ask_match    = new_ask
-                value_changed   += 1
+            # trade_volume=0 代表 quote-only 更新（僅 bid/ask/last），不碰成交量欄位
+            if u.trade_volume > 0:
+                old_ratio = opt.inout_ratio
+                old_vol   = opt.trade_volume
+                new_vol   = u.trade_volume
+                if u.inout_ratio >= 0:
+                    new_ratio = u.inout_ratio
+                    new_bid   = round(new_ratio / 100 * new_vol)
+                    new_ask   = new_vol - new_bid
+                else:
+                    new_bid   = u.bid_match if u.bid_match >= 0 else opt.bid_match
+                    new_ask   = u.ask_match if u.ask_match >= 0 else opt.ask_match
+                    new_ratio = new_bid / new_vol * 100 if new_vol > 0 else 50.0
+                if new_ratio != old_ratio or new_vol != old_vol:
+                    opt.inout_ratio  = new_ratio
+                    opt.trade_volume = new_vol
+                    opt.bid_match    = new_bid
+                    opt.ask_match    = new_ask
+                    value_changed   += 1
             if u.bid_match_day >= 0:
                 opt.bid_match_day    = u.bid_match_day
                 opt.ask_match_day    = u.ask_match_day
@@ -274,6 +276,13 @@ async def api_set_session(payload: SessionModePayload):
 @app.get("/api/get-session")
 async def api_get_session():
     return {"mode": _session_mode}
+
+@app.post("/api/heartbeat")
+async def api_heartbeat(series: str = ""):
+    """bg_poll 心跳：只更新 last_updated 時間戳，不推送資料"""
+    if series and series in stores:
+        _last_updated[series] = time.time()
+    return {"ok": True}
 
 @app.post("/api/set-futures-price")
 async def api_set_futures_price(payload: dict):
