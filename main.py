@@ -45,6 +45,7 @@ _active_day:       str   = ""   # 當前顯示的日盤系列，例如 "TX403"
 _settlement_dates: dict  = {}   # series → settlement_date str
 _subscribed_counts:dict  = {}   # series → 合約數
 _last_updated:     dict  = {}   # series → float timestamp
+_series_ready:     set   = set()  # 已完成第一輪 bulk_req 的 series（ready 才顯示給前端）
 _contracts_cache:  list  = []   # 前端下拉選單資料
 _connected:        bool  = False
 _session_mode:     str   = "full"
@@ -82,6 +83,7 @@ def compute_payload() -> dict:
         },
         "ts": time.time(),
         "session_mode": _session_mode,
+        "series": _active_full,
     }
 
 # ── 廣播 ─────────────────────────────────────────────────────
@@ -325,8 +327,18 @@ async def api_set_series(payload: SeriesPayload):
     _active_day  = payload.series_day
     logger.info(f"active series → full={_active_full}, day={_active_day}")
     threading.Thread(target=_notify_feeder, args=(payload.series_full,), daemon=True).start()
+    data = compute_payload()
     if clients:
-        await broadcast(compute_payload())
+        await broadcast(data)
+    return {"ok": True, "payload": data}
+
+# ── Series Ready 端點 ────────────────────────────────────────────
+
+@app.post("/api/series-ready")
+async def api_series_ready(series: str):
+    """xqfap_feed 完成第一輪 bulk_req 後呼叫，標記 series 為 ready"""
+    _series_ready.add(series)
+    logger.info(f"series ready: {series}")
     return {"ok": True}
 
 # ── 廢棄系列清理端點 ──────────────────────────────────────────
@@ -347,6 +359,7 @@ async def api_purge_series(payload: PurgeSeriesPayload):
             _settlement_dates.pop(s, None)
             _subscribed_counts.pop(s, None)
             _last_updated.pop(s, None)
+            _series_ready.discard(s)
     logger.info(f"purge-series：移除廢棄系列 {stale}，保留 {list(keep_set)}")
     return {"ok": True, "removed": stale}
 
@@ -370,10 +383,7 @@ async def api_contracts_get():
         c2   = dict(c)
         fs   = c['series']                 # full series e.g. "TX1N04"
         ds   = fs.replace('N', '')         # day series  e.g. "TX104"
-        c2['live'] = (
-            _last_updated.get(fs, 0) > 0 or
-            _last_updated.get(ds, 0) > 0
-        )
+        c2['live'] = fs in _series_ready or ds in _series_ready
         result.append(c2)
     return {"contracts": result, "active_full": _active_full, "active_day": _active_day}
 

@@ -852,6 +852,13 @@ def _bulk_request_series(full_series: str):
         if day_batch:
             _post_feed(day_batch, day_series)
             logger.info(f"[bulk_req] {day_series} 刷新 {len(day_batch)} 筆")
+        # 通知 backend 此 series 已完成 bulk_req，可標記 live
+        for _s in (full_series, day_series):
+            try:
+                requests.post(f"{SERVER_URL}/api/series-ready?series={_s}", timeout=3)
+                logger.info(f"[bulk_req] series-ready: {_s}")
+            except Exception as _e:
+                logger.warning(f"[bulk_req] series-ready 失敗 {_s}: {_e}")
     finally:
         _bulk_req_sem.release()
 

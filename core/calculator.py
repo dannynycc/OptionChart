@@ -114,7 +114,7 @@ def calc_atm(
     put_map  = {p.strike: _effective_price(p) for p in puts  if _effective_price(p) > 0}
     common   = sorted(set(call_map) & set(put_map))
     if not common:
-        return None, {}
+        return None, {}, None
 
     if center_price and center_price > 0:
         center = center_price

@@ -547,8 +547,8 @@ function updateTable(rows) {
 
 // ── 合約下拉選單 ───────────────────────────────────────
 let _contractsData    = [];
-let _viewingNonLive   = false;  // 用戶正在查看尚未 ready 的系列
-let _viewingNonLiveIdx = -1;    // 對應 _contractsData 的 index
+let _viewingNonLive       = false;  // 用戶正在查看尚未 ready 的系列
+let _viewingNonLiveSeries = null;   // 目標 series 名稱（e.g. "TXON04"）
 
 function _clearDisplay() {
   const tb = document.getElementById('strike-table-body');
@@ -596,7 +596,15 @@ async function fetchContracts() {
     document.getElementById('settlement-date').textContent =
       list[defaultIdx].settlement_display;
     _updateSeriesCode();
-    _switchSeries(list[defaultIdx]);  // 初始化時設定 active series
+    const defaultContract = list[defaultIdx];
+    if (!defaultContract.live) {
+      // 預設合約尚未 ready → 清空畫面等待，與 onchange 邏輯一致
+      _viewingNonLive       = true;
+      _viewingNonLiveSeries = defaultContract.series;
+      _clearDisplay();
+    } else {
+      _switchSeries(defaultContract);
+    }
 
     sel.onchange = () => {
       _exitSnapshot();
@@ -606,13 +614,14 @@ async function fetchContracts() {
       document.getElementById('settlement-date').textContent = c.settlement_display;
       _updateSeriesCode();
       if (!c.live) {
-        // 系列尚未 ready：清空畫面，等待背景載入完成
-        _viewingNonLive    = true;
-        _viewingNonLiveIdx = idx;
+        // 系列尚未 ready：立刻清空，等待背景載入完成後自動切換
+        _viewingNonLive       = true;
+        _viewingNonLiveSeries = c.series;
         _clearDisplay();
       } else {
-        _viewingNonLive    = false;
-        _viewingNonLiveIdx = -1;
+        // 系列已 ready：不先清空，等 handleData 收到新 series 資料後原子置換
+        _viewingNonLive       = false;
+        _viewingNonLiveSeries = null;
         _switchSeries(c);
       }
     };
@@ -623,15 +632,23 @@ async function fetchContracts() {
   }
 }
 
-function _switchSeries(c) {
+async function _switchSeries(c) {
   if (!c || !c.live) return;
   const seriesFull = c.series;
   const seriesDay  = c.series.replace('N', '');
-  fetch('/api/set-series', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ series_full: seriesFull, series_day: seriesDay }),
-  }).catch(() => {});
+  _targetSeries = seriesFull;  // 告知 handleData 只接受這個 series 的資料
+  try {
+    const resp = await fetch('/api/set-series', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ series_full: seriesFull, series_day: seriesDay }),
+    });
+    if (!resp.ok) return;
+    const result = await resp.json();
+    if (result.payload) {
+      handleData(result.payload, 'HTTP');
+    }
+  } catch(e) {}
 }
 
 function _updateSeriesCode() {
@@ -669,12 +686,11 @@ setInterval(async () => {
         _contractsData[i].live = true;
         anyNewLive = true;
         if (sel.options[i]) sel.options[i].textContent = c.label;  // 移除 ·
-        // 用戶正在等待這個系列 ready → 自動切換並恢復顯示
-        if (_viewingNonLive && _viewingNonLiveIdx === i) {
-          _viewingNonLive    = false;
-          _viewingNonLiveIdx = -1;
+        // 用戶正在等待這個系列 ready → 自動切換並恢復顯示（用 series 名稱比對，不用 index）
+        if (_viewingNonLive && _viewingNonLiveSeries === c.series) {
+          _viewingNonLive       = false;
+          _viewingNonLiveSeries = null;
           _switchSeries(c);
-          console.log(`系列 ${c.label} 已 ready，自動切換`);
         }
       }
     });
@@ -718,6 +734,8 @@ function updateStatus(status, settlement) {
 let lastDataTime = 0;
 let dataSource = '--';
 let _currentSessionMode = null;
+let _currentActiveSeries = null;  // 目前畫面顯示的 series（偵測切換用）
+let _targetSeries        = null;  // 用戶點選後預期要顯示的 series（過渡期間過濾非目標資料）
 
 // ── 饋送中斷 Toast ────────────────────────────────
 let _serverLastUpdated = 0;  // server 端 last_updated（Unix 秒）
@@ -767,10 +785,29 @@ function handleData(data, source) {
     btnDay.classList.toggle('active',  data.session_mode === 'day');
     _updateSeriesCode();
   }
-  // 正在查看未 ready 的系列：暫停 table/chart 更新，只維持連線狀態
+  // 正在查看未 ready 的系列
   if (_viewingNonLive) {
-    updateStatus(data.status, null);
+    // 必須同時滿足：series 名稱吻合 AND _contractsData 已標記為 live
+    // （防止 bulk_req 完成前 WS 廣播同名 series 造成兩段式顯示）
+    const matchAndLive = data.series && data.series === _viewingNonLiveSeries
+      && _contractsData.some(c => c.series === data.series && c.live);
+    if (matchAndLive) {
+      _viewingNonLive       = false;
+      _viewingNonLiveSeries = null;
+    } else {
+      updateStatus(data.status, null);
+      return;
+    }
+  }
+  // 切換過渡期間：忽略非目標 series 的舊資料，防止 _periodic_broadcast 送來的舊 series 覆蓋
+  if (_targetSeries && data.series && data.series !== _targetSeries) {
     return;
+  }
+  // series 切換：清空舊資料再 render，確保原子置換（不顯示舊 series 殘留）
+  if (data.series && data.series !== _currentActiveSeries) {
+    _clearDisplay();
+    _currentActiveSeries = data.series;
+    _targetSeries = null;  // 目標已到達，清除過渡旗標
   }
   updateTable(data.table);
   updateChart(data.pnl, modeChanged);
