@@ -1,5 +1,34 @@
 # Changelog
 
+## v3.16 (2026-03-31)
+
+### 全日盤（TX1N04）優先 ready，啟動後 ~14s 即可顯示預設畫面
+
+#### 問題
+- 啟動後預設合約（04W1 全日盤）需等約 33 秒才能顯示，體驗偏慢
+- 根本原因：`_bulk_request_series()` 在同一批 worker thread 中交錯拉取 full_series（6 fields）與 day_series（3 fields），兩者全部完成後才同時發 series-ready，導致 TX1N04 被 TX104 拖慢
+
+#### 修正
+- `xqfap_feed.py` — `_bulk_request_series()` 改為兩階段設計：
+  - **Phase 1**：worker threads 只 REQUEST full_series（全日盤，6 fields） → POST feed → `series-ready TX1N04`
+  - **Phase 2**：worker threads 只 REQUEST day_series（日盤，3 fields） → POST feed → `series-ready TX104`
+  - TX1N04 在 Phase 1 完成後立即 ready，無需等待 TX104
+  - 抽出 `_cleanup_thread()` helper，兩階段共用 DDEML 資源釋放邏輯
+- `xqfap_feed.py` — `main()` 啟動迴圈：將 `Thread(_bulk_request_series).start()` 移至 `_push_snapshot(meta_full)` 之後、`_push_snapshot(meta_day)` 之前，讓 Phase 1 與 TX104 push_snapshot 並行執行
+
+#### 效果（三次平均）
+| 合約 | v3.15 | v3.16 | 改善 |
+|------|-------|-------|------|
+| TX1N04（全日盤，DEFAULT） | +33.3s | **+14.1s** | **-19.2s（-57%）** |
+| TXUN04 | +33.5s | +25.2s | -8.3s |
+| TX2N04 | +33.5s | +43.3s | +9.8s（trade-off） |
+| TXON04 | +39.3s | +53.3s | +13.9s（trade-off） |
+| ALL READY | ~39.5s | ~55.3s | +15.8s（trade-off） |
+
+> 非預設合約稍微延後（Semaphore(1) 串行約束下的必要代價），換取預設畫面大幅提速。
+
+---
+
 ## v3.15 (2026-03-31)
 
 ### 初始化期間封鎖 WS 渲染，防止右側面板在「載入中」時出現舊資料

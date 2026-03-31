@@ -753,6 +753,11 @@ def _bulk_request_series(full_series: str):
     更新 _all_prevs 並 POST 到 FastAPI。切換 active series 後呼叫，補上錯過的資料。
     _BULK_REQ_THREADS 條並行 DDEML 連線（各 thread-local），縮短等待時間。
     _bulk_req_sem 確保同時只有 1 個 bulk_req 執行，避免多系列並行競爭 DDE 資源。
+
+    兩階段設計：
+      Phase 1：只 REQUEST full_series（全日盤，6 fields）→ series-ready TX1N04
+      Phase 2：只 REQUEST day_series（日盤，3 fields）→ series-ready TX104
+    TX1N04 能比原本更早 ready，UI 可先顯示全日盤資料。
     """
     _bulk_req_sem.acquire()
     t0         = time.time()
@@ -765,106 +770,126 @@ def _bulk_request_series(full_series: str):
     # interleaved slicing：讓各 thread 均勻分散到不同履約價
     chunks     = [symbols[i::n_threads] for i in range(n_threads)]
 
-    full_results: list = []
-    day_results:  list = []
-    merge_lock = threading.Lock()
+    def _cleanup_thread():
+        """釋放 thread-local DDEML 連線（Windows 系統資源，GC 無法自動回收）"""
+        hconv = getattr(_thread_local, 'hconv', None)
+        inst  = getattr(_thread_local, 'inst',  None)
+        if hconv:
+            try:
+                _user32.DdeDisconnect(hconv)
+            except Exception:
+                pass
+        if inst:
+            try:
+                _user32.DdeUninitialize(inst.value)
+            except Exception:
+                pass
+        _thread_local.hconv = None
+        _thread_local.inst  = None
 
-    def _worker(chunk: list):
-        local_full: list = []
-        local_day:  list = []
-        try:
-            for full_sym in chunk:
-                day_sym = full_sym.replace(full_series, day_series, 1)
-
-                # 全日盤
-                vol_str   = _req_thread(f"{full_sym}.TF-TotalVolume")
-                ratio_str = _req_thread(f"{full_sym}.TF-InOutRatio")
-                avg_str   = _req_thread(f"{full_sym}.TF-AvgPrice")
-                bid_str   = _req_thread(f"{full_sym}.TF-Bid")
-                ask_str   = _req_thread(f"{full_sym}.TF-Ask")
-                last_str  = _req_thread(f"{full_sym}.TF-Price")
-                new_vol   = int(float(vol_str)) if vol_str else 0
-                new_ratio = _to_float(ratio_str)
-                new_avg   = _to_float(avg_str)
-                # bg_poll 永遠送出，即使 vol=0，讓 main.py 更新 last_updated（盤後心跳用）
-                local_full.append({'symbol': full_sym, 'trade_volume': new_vol,
-                                   'inout_ratio': new_ratio, 'avg_price': new_avg,
-                                   'bid_price': _to_float(bid_str),
-                                   'ask_price': _to_float(ask_str),
-                                   'last_price': _to_float(last_str),
-                                   '_ratio': new_ratio, '_vol': new_vol})
-
-                # 日盤（獨立 REQUEST，非改名）
-                if has_day:
-                    d_vol_str   = _req_thread(f"{day_sym}.TF-TotalVolume")
-                    d_ratio_str = _req_thread(f"{day_sym}.TF-InOutRatio")
-                    d_avg_str   = _req_thread(f"{day_sym}.TF-AvgPrice")
-                    d_vol   = int(float(d_vol_str)) if d_vol_str else 0
-                    d_ratio = _to_float(d_ratio_str)
-                    d_avg   = _to_float(d_avg_str)
-                    local_day.append({'symbol': day_sym, 'trade_volume': d_vol,
-                                      'inout_ratio': d_ratio, 'avg_price': d_avg,
-                                      '_day_sym': day_sym, '_ratio': d_ratio, '_vol': d_vol})
-
-            with merge_lock:
-                full_results.extend(local_full)
-                day_results.extend(local_day)
-        finally:
-            # 釋放 thread-local DDEML 連線（Windows 系統資源，GC 無法自動回收）
-            hconv = getattr(_thread_local, 'hconv', None)
-            inst  = getattr(_thread_local, 'inst',  None)
-            if hconv:
-                try:
-                    _user32.DdeDisconnect(hconv)
-                except Exception:
-                    pass
-            if inst:
-                try:
-                    _user32.DdeUninitialize(inst.value)
-                except Exception:
-                    pass
-            _thread_local.hconv = None
-            _thread_local.inst  = None
-
-    threads = [threading.Thread(target=_worker, args=(chunk,), daemon=True)
-               for chunk in chunks]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join()
-
-    # 更新 _all_prevs
-    fp = _all_prevs.get(full_series)
-    if fp is not None:
-        for item in full_results:
-            fp[item['symbol']] = (item['_ratio'], item['trade_volume'])
-    dp = _all_prevs.get(day_series)
-    if dp is not None:
-        for item in day_results:
-            dp[item['symbol']] = (item['_ratio'], item['trade_volume'])
-
-    # 清掉內部 helper key 再 POST
-    full_batch = [{k: v for k, v in r.items() if not k.startswith('_')}
-                  for r in full_results]
-    day_batch  = [{k: v for k, v in r.items() if not k.startswith('_')}
-                  for r in day_results]
-
-    elapsed = time.time() - t0
     try:
+        # ── Phase 1: full_series（全日盤，6 fields）────────────────────────
+        full_results: list = []
+        merge_lock_full = threading.Lock()
+
+        def _worker_full(chunk: list):
+            local_full: list = []
+            try:
+                for full_sym in chunk:
+                    vol_str   = _req_thread(f"{full_sym}.TF-TotalVolume")
+                    ratio_str = _req_thread(f"{full_sym}.TF-InOutRatio")
+                    avg_str   = _req_thread(f"{full_sym}.TF-AvgPrice")
+                    bid_str   = _req_thread(f"{full_sym}.TF-Bid")
+                    ask_str   = _req_thread(f"{full_sym}.TF-Ask")
+                    last_str  = _req_thread(f"{full_sym}.TF-Price")
+                    new_vol   = int(float(vol_str)) if vol_str else 0
+                    new_ratio = _to_float(ratio_str)
+                    new_avg   = _to_float(avg_str)
+                    # bg_poll 永遠送出，即使 vol=0，讓 main.py 更新 last_updated（盤後心跳用）
+                    local_full.append({'symbol': full_sym, 'trade_volume': new_vol,
+                                       'inout_ratio': new_ratio, 'avg_price': new_avg,
+                                       'bid_price': _to_float(bid_str),
+                                       'ask_price': _to_float(ask_str),
+                                       'last_price': _to_float(last_str),
+                                       '_ratio': new_ratio, '_vol': new_vol})
+                with merge_lock_full:
+                    full_results.extend(local_full)
+            finally:
+                _cleanup_thread()
+
+        threads_p1 = [threading.Thread(target=_worker_full, args=(chunk,), daemon=True)
+                      for chunk in chunks]
+        for t in threads_p1:
+            t.start()
+        for t in threads_p1:
+            t.join()
+
+        # 更新 _all_prevs + POST + series-ready for full_series
+        fp = _all_prevs.get(full_series)
+        if fp is not None:
+            for item in full_results:
+                fp[item['symbol']] = (item['_ratio'], item['trade_volume'])
+        full_batch = [{k: v for k, v in r.items() if not k.startswith('_')}
+                      for r in full_results]
+        elapsed1 = time.time() - t0
         if full_batch:
             _post_feed(full_batch, full_series)
-            logger.info(f"[bulk_req] {full_series} 刷新 {len(full_batch)} 筆"
-                        f"（{n_threads} threads，{elapsed:.1f}s）")
-        if day_batch:
-            _post_feed(day_batch, day_series)
-            logger.info(f"[bulk_req] {day_series} 刷新 {len(day_batch)} 筆")
-        # 通知 backend 此 series 已完成 bulk_req，可標記 live
-        for _s in (full_series, day_series):
+            logger.info(f"[bulk_req] Phase1 {full_series} {len(full_batch)} 筆"
+                        f"（{n_threads} threads，{elapsed1:.1f}s）")
+        try:
+            requests.post(f"{SERVER_URL}/api/series-ready?series={full_series}", timeout=3)
+            logger.info(f"[bulk_req] series-ready: {full_series}")
+        except Exception as _e:
+            logger.warning(f"[bulk_req] series-ready 失敗 {full_series}: {_e}")
+
+        # ── Phase 2: day_series（日盤，3 fields）──────────────────────────
+        if has_day:
+            day_results: list = []
+            merge_lock_day = threading.Lock()
+
+            def _worker_day(chunk: list):
+                local_day: list = []
+                try:
+                    for full_sym in chunk:
+                        day_sym     = full_sym.replace(full_series, day_series, 1)
+                        d_vol_str   = _req_thread(f"{day_sym}.TF-TotalVolume")
+                        d_ratio_str = _req_thread(f"{day_sym}.TF-InOutRatio")
+                        d_avg_str   = _req_thread(f"{day_sym}.TF-AvgPrice")
+                        d_vol   = int(float(d_vol_str)) if d_vol_str else 0
+                        d_ratio = _to_float(d_ratio_str)
+                        d_avg   = _to_float(d_avg_str)
+                        local_day.append({'symbol': day_sym, 'trade_volume': d_vol,
+                                          'inout_ratio': d_ratio, 'avg_price': d_avg,
+                                          '_day_sym': day_sym, '_ratio': d_ratio, '_vol': d_vol})
+                    with merge_lock_day:
+                        day_results.extend(local_day)
+                finally:
+                    _cleanup_thread()
+
+            threads_p2 = [threading.Thread(target=_worker_day, args=(chunk,), daemon=True)
+                          for chunk in chunks]
+            for t in threads_p2:
+                t.start()
+            for t in threads_p2:
+                t.join()
+
+            # 更新 _all_prevs + POST + series-ready for day_series
+            dp = _all_prevs.get(day_series)
+            if dp is not None:
+                for item in day_results:
+                    dp[item['symbol']] = (item['_ratio'], item['trade_volume'])
+            day_batch = [{k: v for k, v in r.items() if not k.startswith('_')}
+                         for r in day_results]
+            elapsed2 = time.time() - t0
+            if day_batch:
+                _post_feed(day_batch, day_series)
+                logger.info(f"[bulk_req] Phase2 {day_series} {len(day_batch)} 筆"
+                            f"（{elapsed2:.1f}s）")
             try:
-                requests.post(f"{SERVER_URL}/api/series-ready?series={_s}", timeout=3)
-                logger.info(f"[bulk_req] series-ready: {_s}")
+                requests.post(f"{SERVER_URL}/api/series-ready?series={day_series}", timeout=3)
+                logger.info(f"[bulk_req] series-ready: {day_series}")
             except Exception as _e:
-                logger.warning(f"[bulk_req] series-ready 失敗 {_s}: {_e}")
+                logger.warning(f"[bulk_req] series-ready 失敗 {day_series}: {_e}")
     finally:
         _bulk_req_sem.release()
 
@@ -1539,11 +1564,11 @@ def main():
         _post_init(contracts_day,  day_series,  sd_str)
         if i == 0:  # 只對 active series 做初始快照；其餘由 bg_poll 第一輪更新
             _push_snapshot(meta_full, full_series)
-            _push_snapshot(meta_day,  day_series)
-            _push_futures_price(float(center))
-            # 立刻補一次 DDEML 全量（修正 AvgPrice 小數），不等 bg_poll 60s
+            # 立刻開始 DDEML 全量（Phase1 TX1N04 並行於 TX104 push_snapshot）
             threading.Thread(target=_bulk_request_series,
                              args=(full_series,), daemon=True).start()
+            _push_snapshot(meta_day,  day_series)
+            _push_futures_price(float(center))
         else:
             logger.info(f"跳過 push_snapshot [{full_series}]，立即背景載入")
             threading.Thread(target=_bulk_request_series,
