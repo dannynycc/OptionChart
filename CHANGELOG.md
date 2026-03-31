@@ -34,6 +34,20 @@
 
 ---
 
+## v4.0.1 (2026-03-31)
+
+### Hotfix：快照觸發時機修正 + 日盤 heartbeat 補漏
+
+#### 問題
+- 快照門檻為 `>= 13:45:00`，收盤最後一筆資料可能在 13:44:xx 進來，導致快照不觸發
+- `xqfap_feed.py` bg_poll heartbeat 只更新全日盤（TX1N04）的 `_last_updated`；日盤（TX104）在收盤後 DDE advise 靜止，`_last_updated` 停在 13:44:xx，快照同樣無法觸發
+
+#### 修正
+- `main.py` — `_try_save_snapshot` 門檻改為 `>= 13:45:20`，多留 20 秒等收盤資料完整推入
+- `xqfap_feed.py` — bg_poll heartbeat 同時對 `day_series`（TX104 等）發送，確保 14:00 左右 `_last_updated` 仍會被更新至 >= 13:45:20
+
+---
+
 ## v3.17.1 (2026-03-31)
 
 ### Hotfix：修正 compute_payload() UnboundLocalError
