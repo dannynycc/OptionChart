@@ -34,6 +34,19 @@
 
 ---
 
+## v4.2 (2026-04-01)
+
+### 資料饋送中斷 Toast 修正
+
+#### 問題
+- 切到個別快照（非即時類）時，`_serverLastUpdated` 停止更新，90 秒後仍會觸發「⚠ 資料饋送中斷」toast 並嘗試重啟 xqfap，但快照資料完全靜態，xqfap 狀態根本無關
+- 原本把週累積也一起豁免，但週累積有 live pnl 即時疊加，xqfap 掛掉會影響數據，不應豁免
+
+#### 修正
+- `static/app.js` — feed-dead 檢查改為只在 `_viewMode === 'snapshot'` 時 bail out（同時收起 toast）；`live` 與 `weekly` 模式維持原本的 90s 檢查與自動重啟
+
+---
+
 ## v4.1 (2026-03-31)
 
 ### Hotfix：快照觸發時機修正 + 日盤 heartbeat 補漏

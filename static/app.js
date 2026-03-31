@@ -836,6 +836,10 @@ let _lastRestartAt = 0;  // Unix 秒，上次觸發重啟的時間
 
 setInterval(() => {
   if (_serverLastUpdated === 0) return;  // 尚未收到第一筆
+  if (_viewMode === 'snapshot') {        // 純快照模式：資料完全靜態，不檢查饋送
+    _feedToast.classList.remove('visible');
+    return;
+  }
   const now = Date.now() / 1000;
   const ago = Math.round(now - _serverLastUpdated);
 
