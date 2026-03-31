@@ -40,6 +40,9 @@
     <span class="label">期交所代號</span>
     <span id="series-code">--</span>
   </div>
+  <div class="toolbar-item">
+    <button id="btn-copy-table" class="toggle-btn" title="複製 T 字表為 TSV，可直接貼到 Excel">複製表格</button>
+  </div>
   <!-- 狀態列移到工具列右側 -->
   <div id="status-bar">
     <span id="conn-dot" class="dot dot-gray"></span>
@@ -55,36 +58,40 @@
   <!-- 左側：T字報價表 -->
   <section id="left-panel">
     <div id="table-scroll">
-      <div id="table-header">
-        <div class="col-call-sell">外盤成交量<br>(Buy Call)</div>
-        <div class="col-call-buy">內盤成交量<br>(Sell Call)</div>
-        <div class="col-call-vol">成交量</div>
-        <div class="col-call-ratio">內外盤<br>(%)</div>
-        <div class="col-call-avg">均價</div>
-        <div class="col-call-bid">委買</div>
-        <div class="col-call-ask">委賣</div>
-        <div class="col-call-last">成交價</div>
-        <div class="col-call-val">淨CALL</div>
-        <div class="col-call-bar"></div>
-        <div class="col-strike">履約價</div>
-        <div class="col-put-bar"></div>
-        <div class="col-put-val">淨PUT</div>
-        <div class="col-put-bid">委買</div>
-        <div class="col-put-ask">委賣</div>
-        <div class="col-put-last">成交價</div>
-        <div class="col-put-buy">內盤成交量<br>(Sell Put)</div>
-        <div class="col-put-sell">外盤成交量<br>(Buy Put)</div>
-        <div class="col-put-vol">成交量</div>
-        <div class="col-put-ratio">內外盤<br>(%)</div>
-        <div class="col-put-avg">均價</div>
-        <div class="col-synthetic">合成期貨<br>(F_K)</div>
-        <div class="col-pnl-call">Call損益<br>(億)</div>
-        <div class="col-pnl-put">Put損益<br>(億)</div>
-        <div class="col-pnl-combined">合併損益<br>(億)</div>
-      </div>
-      <div id="strike-table-body">
-        <!-- 由 app.js 動態填入 -->
-      </div>
+      <table id="strike-table">
+        <thead id="table-header">
+          <tr>
+            <th class="col-call-sell">外盤成交量<br>(Buy Call)</th>
+            <th class="col-call-buy">內盤成交量<br>(Sell Call)</th>
+            <th class="col-call-vol">成交量</th>
+            <th class="col-call-ratio">內外盤<br>(%)</th>
+            <th class="col-call-avg">均價</th>
+            <th class="col-call-bid">委買</th>
+            <th class="col-call-ask">委賣</th>
+            <th class="col-call-last">成交價</th>
+            <th class="col-call-val">淨CALL</th>
+            <th class="col-call-bar"></th>
+            <th class="col-strike">履約價</th>
+            <th class="col-put-bar"></th>
+            <th class="col-put-val">淨PUT</th>
+            <th class="col-put-bid">委買</th>
+            <th class="col-put-ask">委賣</th>
+            <th class="col-put-last">成交價</th>
+            <th class="col-put-buy">內盤成交量<br>(Sell Put)</th>
+            <th class="col-put-sell">外盤成交量<br>(Buy Put)</th>
+            <th class="col-put-vol">成交量</th>
+            <th class="col-put-ratio">內外盤<br>(%)</th>
+            <th class="col-put-avg">均價</th>
+            <th class="col-synthetic">合成期貨<br>(F_K)</th>
+            <th class="col-pnl-call">Call損益<br>(億)</th>
+            <th class="col-pnl-put">Put損益<br>(億)</th>
+            <th class="col-pnl-combined">合併損益<br>(億)</th>
+          </tr>
+        </thead>
+        <tbody id="strike-table-body">
+          <!-- 由 app.js 動態填入 -->
+        </tbody>
+      </table>
     </div>
   </section>
 

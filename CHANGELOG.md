@@ -34,6 +34,30 @@
 
 ---
 
+## v4.3 (2026-04-01)
+
+### T 字表 Excel 複製 + 合成期貨對齊修正
+
+#### T 字表改為真正 `<table>` 結構
+- `static/index.html` — `#table-header` div → `<thead><tr><th>`；`#strike-table-body` div → `<tbody>`
+- `static/style.css` — 移除 flex row layout，改用 `table-layout: fixed`；`thead th` 加 `position: sticky` 固定表頭；捲動移至 `#table-scroll`
+- `static/app.js` — `_cell()` 改建 `<td>`；`_barCell()` 改建 `<td>` 含內層 `div.bar-wrapper`，用 `td._bar` 直接 reference 取代脆弱的 `firstChild` 遍歷；row 改建 `<tr>`
+- 效果：Ctrl+A → Ctrl+C → 貼 Excel 自動帶欄位結構與顏色；選特定文字複製不受干擾
+
+#### Hover 底色不帶入 Excel
+- `.row:hover` 改用 `box-shadow: inset 0 0 0 1000px #1c2128`，視覺不變；Excel 貼上時忽略 box-shadow，非 ATM row 不再帶底色
+
+#### 快照模式不觸發資料饋送中斷 Toast
+- 純快照模式（靜態資料）跳過 feed-dead 檢查；週累積模式維持檢查（仍有 live pnl）
+
+#### 合成期貨 15 格對齊 ATM 修正
+- `core/calculator.py` — `calc_atm` 改為兩步驟：先用 `center_price` 找初步中心取 ±7 算出 implied/atm，再以 **atm 為真正中心** 重新取 ±7 重建 `synthetic_map`；修正前 `_futures_price` 偏離 ATM 時，合成期貨欄位會偏向期貨價而非真實 ATM
+
+#### ATM 初始捲動修正
+- `updateTable` 改用 `requestAnimationFrame` 確保整批 DOM 更新完成後再執行 `scrollIntoView`，避免資料還沒全部寫入時就計算捲動位置
+
+---
+
 ## v4.2 (2026-04-01)
 
 ### 資料饋送中斷 Toast 修正

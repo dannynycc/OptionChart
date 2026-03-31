@@ -72,34 +72,40 @@ body {
   overflow: hidden;
 }
 
-/* T字表水平捲動包裹層 */
+/* T字表捲動包裹層 */
 #table-scroll {
   flex: 1;
   overflow-x: hidden;
-  overflow-y: hidden;
-  display: flex;
-  flex-direction: column;
+  overflow-y: auto;
   min-height: 0;
+  scrollbar-width: thin;
+  scrollbar-color: #30363d transparent;
 }
 
-/* 所有欄位禁止縮小，確保水平捲動生效 */
-[class*="col-"] { flex-shrink: 0; }
+/* 真正的 table 結構 */
+#strike-table {
+  table-layout: fixed;
+  border-collapse: collapse;
+  width: max-content;
+}
 
-/* 表頭 */
-#table-header {
-  display: flex;
-  align-items: center;
+/* 表頭（sticky） */
+#table-header th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
   min-height: 34px;
-  padding: 2px 0;
+  padding: 2px 0 2px 0;
   background: #161b22;
   border-bottom: 1px solid #30363d;
   font-weight: 600;
   color: #8b949e;
   font-size: 11px;
-  flex-shrink: 0;
+  text-align: right;
+  padding-right: 2px;
+  white-space: nowrap;
+  vertical-align: middle;
 }
-/* 標題列全部置中 */
-#table-header > div { text-align: right !important; padding-left: 0 !important; padding-right: 2px !important; }
 
 /* 長標題欄（內盤成交量/外盤成交量）允許自動換行 */
 #table-header .col-call-buy,
@@ -115,11 +121,8 @@ body {
   line-height: 1.25;
 }
 
-/* 表格捲動區 */
+/* 表格捲動區（tbody 不需要自行捲動） */
 #strike-table-body {
-  flex: 1;
-  overflow-y: auto;
-  overflow-x: hidden;
   scrollbar-width: thin;
   scrollbar-color: #30363d transparent;
 }
@@ -178,13 +181,14 @@ body {
 
 /* 每列 row */
 .row {
-  display: flex;
-  align-items: center;
   height: 22px;
   border-bottom: 1px solid #21262d;
   transition: background 0.1s;
 }
-.row:hover { background: #1c2128; }
+.row td {
+  vertical-align: middle;
+}
+.row:hover { box-shadow: inset 0 0 0 1000px #1c2128; }
 .row.highlight {
   background: #1a3a5c;
   border-bottom-color: #388bfd;

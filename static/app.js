@@ -361,7 +361,7 @@ function _updatePnlStats() {
 
 // ── DOM helper ────────────────────────────────────────
 function _cell(cls, text, flash) {
-  const d = document.createElement('div');
+  const d = document.createElement('td');
   d._baseCls = cls;
   d.className = cls + (flash ? ' flash' : '');
   d.textContent = text;
@@ -390,14 +390,18 @@ function _updateCell(el, cls, text, flash) {
     }, 2000);
   }
 }
-function _barCell(wrapCls, barCls, pct) {
+function _barCell(tdCls, barCls, pct) {
+  const td = document.createElement('td');
+  td.className = tdCls;
   const w = document.createElement('div');
-  w.className = wrapCls + ' bar-wrapper';
+  w.className = 'bar-wrapper';
   const b = document.createElement('div');
   b.className = barCls;
   b.style.width = pct + '%';
   w.appendChild(b);
-  return w;
+  td.appendChild(w);
+  td._bar = b;  // 直接 reference，不靠 firstChild 遍歷
+  return td;
 }
 
 // ── 更新左側 T 字報價表 ────────────────────────────────
@@ -461,10 +465,10 @@ function updateTable(rows) {
       _updateCell(c.call_ask,  'col-call-ask',   cask  > 0 ? _fmtPrice(cask)  : '',                 ch(cask,  'cask'));
       _updateCell(c.call_last, 'col-call-last',  clast > 0 ? _fmtPrice(clast) : '',                 ch(clast, 'clast'));
       _updateCell(c.call_val,   ncCls,            nc !== 0 ? nc.toFixed(0) : '',                     ch(nc,  'nc'));
-      c.call_bar.firstChild.className = 'bar-call ' + (nc >= 0 ? 'positive' : 'negative');
-      c.call_bar.firstChild.style.width = callPct + '%';
-      c.put_bar.firstChild.className  = 'bar-put '  + (displayedNp >= 0 ? 'positive' : 'negative');
-      c.put_bar.firstChild.style.width = putPct + '%';
+      c.call_bar._bar.className = 'bar-call ' + (nc >= 0 ? 'positive' : 'negative');
+      c.call_bar._bar.style.width = callPct + '%';
+      c.put_bar._bar.className  = 'bar-put '  + (displayedNp >= 0 ? 'positive' : 'negative');
+      c.put_bar._bar.style.width = putPct + '%';
       _updateCell(c.put_val,    npCls,            displayedNp !== 0 ? displayedNp.toFixed(0) : '',   ch(np,  'np'));
       _updateCell(c.put_bid,   'col-put-bid',    pbid  > 0 ? _fmtPrice(pbid)  : '',                 ch(pbid,  'pbid'));
       _updateCell(c.put_ask,   'col-put-ask',    pask  > 0 ? _fmtPrice(pask)  : '',                 ch(pask,  'pask'));
@@ -480,7 +484,7 @@ function updateTable(rows) {
       _updateCell(c.pnl_combined,'col-pnl-combined', pcomb != null ? pcomb.toFixed(4) : '', ch(pcomb, 'pcomb'));
     } else {
       // ── 首次建立 row ──
-      const row = document.createElement('div');
+      const row = document.createElement('tr');
       row.className = 'row' + (r.highlight ? ' highlight' : '');
       row.dataset.strike = String(r.strike);
       const c = {};
@@ -529,7 +533,10 @@ function updateTable(rows) {
   if (highlighted) {
     const currentAtmStrike = highlighted.dataset.strike;
     if (!_tableScrolled || currentAtmStrike !== body._lastAtmStrike) {
-      highlighted.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      // requestAnimationFrame 確保整批 DOM 更新完成後再計算捲動位置
+      requestAnimationFrame(() => {
+        highlighted.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      });
       _tableScrolled = true;
       body._lastAtmStrike = currentAtmStrike;
     }
@@ -1080,3 +1087,59 @@ document.addEventListener('mouseup', () => {
   document.body.style.userSelect = '';
   chart.resize();
 });
+
+// ── 複製表格為 TSV（可直接貼到 Excel）────────────────────────
+function _generateTableTSV() {
+  const rows = window._lastRows;
+  if (!rows || rows.length === 0) return null;
+  const sfx = showDayOnly ? '_day' : '';
+  const gC = (r, f) => r[f + sfx] ?? r[f];
+  const fmt = v => (v == null || v === '') ? '' : String(v);
+  const headers = [
+    '外盤成交量(BuyCall)', '內盤成交量(SellCall)', '成交量Call', '內外盤%Call', '均價Call',
+    '委買Call', '委賣Call', '成交價Call', '淨Call',
+    '履約價',
+    '淨Put', '委買Put', '委賣Put', '成交價Put',
+    '內盤成交量(SellPut)', '外盤成交量(BuyPut)', '成交量Put', '內外盤%Put', '均價Put',
+    '合成期貨F_K', 'Call損益(億)', 'Put損益(億)', '合併損益(億)',
+  ];
+  const lines = [headers.join('\t')];
+  for (const r of rows) {
+    const vc = gC(r, 'vol_call'), vp = gC(r, 'vol_put');
+    const rc = gC(r, 'ratio_call'), rp = gC(r, 'ratio_put');
+    const ac = gC(r, 'ask_match_call'), bc = gC(r, 'bid_match_call');
+    const ap = gC(r, 'ask_match_put'),  bp = gC(r, 'bid_match_put');
+    const nc = gC(r, 'net_call'), np = gC(r, 'net_put');
+    const cbid = gC(r,'bid_price_call'), cask = gC(r,'ask_price_call'), clast = gC(r,'last_price_call');
+    const pbid = gC(r,'bid_price_put'),  pask = gC(r,'ask_price_put'),  plast = gC(r,'last_price_put');
+    lines.push([
+      fmt(bc > 0 ? bc : ''), fmt(ac > 0 ? ac : ''), fmt(vc > 0 ? vc : ''),
+      fmt(vc > 0 ? rc.toFixed(2) : ''), fmt(r.avg_price_call > 0 ? r.avg_price_call.toFixed(1) : ''),
+      fmt(cbid > 0 ? cbid : ''), fmt(cask > 0 ? cask : ''), fmt(clast > 0 ? clast : ''),
+      fmt(nc !== 0 ? nc.toFixed(0) : ''),
+      fmt(r.strike),
+      fmt(np !== 0 ? np.toFixed(0) : ''),
+      fmt(pbid > 0 ? pbid : ''), fmt(pask > 0 ? pask : ''), fmt(plast > 0 ? plast : ''),
+      fmt(ap > 0 ? ap : ''), fmt(bp > 0 ? bp : ''), fmt(vp > 0 ? vp : ''),
+      fmt(vp > 0 ? rp.toFixed(2) : ''), fmt(r.avg_price_put > 0 ? r.avg_price_put.toFixed(1) : ''),
+      fmt(r.synthetic_futures != null ? r.synthetic_futures.toFixed(1) : ''),
+      fmt(r.pnl_call     != null ? r.pnl_call.toFixed(4)     : ''),
+      fmt(r.pnl_put      != null ? r.pnl_put.toFixed(4)      : ''),
+      fmt(r.pnl_combined != null ? r.pnl_combined.toFixed(4) : ''),
+    ].join('\t'));
+  }
+  return lines.join('\n');
+}
+
+// 按鈕點擊
+document.getElementById('btn-copy-table').addEventListener('click', () => {
+  const tsv = _generateTableTSV();
+  if (!tsv) return;
+  navigator.clipboard.writeText(tsv).then(() => {
+    const btn = document.getElementById('btn-copy-table');
+    const orig = btn.textContent;
+    btn.textContent = '已複製!';
+    setTimeout(() => { btn.textContent = orig; }, 1500);
+  });
+});
+

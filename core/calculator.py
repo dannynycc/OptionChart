@@ -151,13 +151,19 @@ def calc_atm(
         rough_implied = sum(k + call_map[k] - put_map[k] for k in common) / len(common)
         center = rough_implied
 
-    # 先找最接近 center 的那一檔作為中心，再向上/向下各取 7 檔（共 15 檔）
+    # Step1：用 center 找初步中心，取 ±7 計算粗略 implied forward
     center_strike = min(common, key=lambda k: abs(k - center))
     idx = common.index(center_strike)
-    nearest = common[max(0, idx - 7): idx + 8]   # 最多 15 檔（邊界可能少）
-    synthetic_map = {k: round(k + call_map[k] - put_map[k], 1) for k in nearest}
-    implied = round(sum(synthetic_map.values()) / len(synthetic_map))
+    nearest = common[max(0, idx - 7): idx + 8]
+    rough_map = {k: round(k + call_map[k] - put_map[k], 1) for k in nearest}
+    implied = round(sum(rough_map.values()) / len(rough_map))
     atm     = min(common, key=lambda k: abs(k - implied))
+
+    # Step2：以 atm 為真正中心重新取 ±7，確保 synthetic_map 對齊 ATM
+    atm_idx      = common.index(atm)
+    atm_nearest  = common[max(0, atm_idx - 7): atm_idx + 8]
+    synthetic_map = {k: round(k + call_map[k] - put_map[k], 1) for k in atm_nearest}
+    implied       = round(sum(synthetic_map.values()) / len(synthetic_map))
     return atm, synthetic_map, implied
 
 
