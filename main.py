@@ -111,10 +111,10 @@ def _try_save_snapshot(series: str) -> bool:
     now  = datetime.datetime.now()
     today = now.strftime("%Y-%m-%d")
 
-    # 條件：last_updated 是今天 且 >= 13:45
+    # 條件：last_updated 是今天 且 >= 13:45:20（多留 20 秒確保收盤資料已完整推入）
     if dt.strftime("%Y-%m-%d") != today:
         return False
-    if dt.hour < 13 or (dt.hour == 13 and dt.minute < 45):
+    if (dt.hour, dt.minute, dt.second) < (13, 45, 20):
         return False
     # 今天已存過
     if _snapshot_taken_today.get(series) == today:

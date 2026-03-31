@@ -5,10 +5,10 @@
 ### 週累積損益快照功能（即時(當週全日盤累積)）
 
 #### 新增功能
-- **快照機制**：每日 13:45 自動存快照（`snapshots/{series}_{date}_1345.json`），含 strikes/pnl/table/atm_strike/implied_forward
+- **快照機制**：每日 13:45:20 後自動存快照（`snapshots/{series}_{date}_1345.json`），含 strikes/pnl/table/atm_strike/implied_forward；全日盤（TX1N04 等）與日盤（TX104 等）各自獨立存檔
 - **損益視圖下拉選單**（工具列）：
   - 即時 (當盤)：現有即時功能不變
-  - 即時 (當週全日盤累積)：歷史快照 baseline + 當盤 live pnl 疊加
+  - 即時 (當週全日盤累積)：全日盤歷史快照加總（baseline）+ 當盤 live pnl 永遠疊加；14:35 規則決定 baseline 是否含今天快照（14:35 前不含，14:35 後含）
   - 個別快照（YYYY-MM-DD HH:MM）：顯示歷史快照的損益圖與 T 字報價表
 - **`/api/snapshots`**：列出快照 metadata
 - **`/api/snapshots/{filename}`**：取得單張快照完整資料

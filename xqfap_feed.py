@@ -841,7 +841,6 @@ def _bulk_request_series(full_series: str):
             logger.info(f"[bulk_req] series-ready: {full_series}")
         except Exception as _e:
             logger.warning(f"[bulk_req] series-ready 失敗 {full_series}: {_e}")
-
         # ── Phase 2: day_series（日盤，3 fields）──────────────────────────
         if has_day:
             day_results: list = []
@@ -993,9 +992,14 @@ def _bg_poll_one_series(full_series: str, offset: float):
     time.sleep(offset)
     while True:
         if full_series == _active_advise_series:
-            logger.info(f"[bg_poll] 心跳 {full_series}")
+            day_series = full_series.replace('N', '')
+            logger.info(f"[bg_poll] 心跳 {full_series} / {day_series}")
             try:
                 requests.post(f"{SERVER_URL}/api/heartbeat?series={full_series}", timeout=2)
+            except Exception:
+                pass
+            try:
+                requests.post(f"{SERVER_URL}/api/heartbeat?series={day_series}", timeout=2)
             except Exception:
                 pass
         else:
