@@ -30,8 +30,11 @@
     <button id="btn-day-session"  class="toggle-btn">日盤(一般)</button>
   </div>
   <div class="toolbar-item">
-    <button id="btn-snapshot-20260326" class="toggle-btn snapshot-tab">📌 03F4 20260326 13:52</button>
-    <button id="btn-snapshot-20260327" class="toggle-btn snapshot-tab">📌 03F4 20260327 14:56</button>
+    <span class="label">損益視圖</span>
+    <select id="view-mode-select">
+      <option value="live">即時 (當盤)</option>
+      <option value="weekly">即時 (當週全日盤累積)</option>
+    </select>
   </div>
   <div class="toolbar-item">
     <span class="label">期交所代號</span>
@@ -106,8 +109,6 @@
   <div class="toast-body" id="feed-dead-msg">xqfap 已停止推送資料</div>
 </div>
 
-<script src="/static/snapshot_20260326_03F4.js"></script>
-<script src="/static/snapshot_20260327_03F4.js"></script>
 <script src="/static/app.js"></script>
 </body>
 </html>

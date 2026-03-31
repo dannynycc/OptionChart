@@ -179,20 +179,8 @@ function _setSessionMode(mode) {
   }).catch(() => {});
 }
 
-function _exitSnapshot() {
-  if (!_snapshotMode) return;
-  _snapshotMode = false;
-  _snapshots.forEach(s => {
-    const b = document.getElementById(s.btnId);
-    if (b) b.classList.remove('active');
-  });
-  document.getElementById('last-updated').textContent = '--';
-  document.getElementById('series-code').textContent  = '--';
-  pollFallback();
-}
-
-btnFull.addEventListener('click', () => { _exitSnapshot(); _setSessionMode('full'); });
-btnDay.addEventListener('click',  () => { _exitSnapshot(); _setSessionMode('day');  });
+btnFull.addEventListener('click', () => { _setSessionMode('full'); });
+btnDay.addEventListener('click',  () => { _setSessionMode('day');  });
 
 // ── 表格最大絕對值（用來計算 bar 寬度比例） ────────────
 let maxAbsNet = 1;
@@ -494,6 +482,7 @@ function updateTable(rows) {
       // ── 首次建立 row ──
       const row = document.createElement('div');
       row.className = 'row' + (r.highlight ? ' highlight' : '');
+      row.dataset.strike = String(r.strike);
       const c = {};
       c.call_sell  = _cell('col-call-sell',  bc > 0 ? String(bc) : '',                          ch(bc,  'bc')  ? ' flash' : '');
       c.call_buy   = _cell('col-call-buy',   ac > 0 ? String(ac) : '',                          ch(ac,  'ac')  ? ' flash' : '');
@@ -535,21 +524,80 @@ function updateTable(rows) {
     }
   }
 
-  // 只在首次載入時自動捲動到高亮列，之後不強制拉回
-  if (!_tableScrolled) {
-    const highlighted = body.querySelector('.highlight');
-    if (highlighted) {
+  // ATM 行（highlight）改變時自動置中；live 更新期間 ATM 不變就不重複捲動
+  const highlighted = body.querySelector('.highlight');
+  if (highlighted) {
+    const currentAtmStrike = highlighted.dataset.strike;
+    if (!_tableScrolled || currentAtmStrike !== body._lastAtmStrike) {
       highlighted.scrollIntoView({ block: 'center', behavior: 'smooth' });
       _tableScrolled = true;
+      body._lastAtmStrike = currentAtmStrike;
     }
   }
 }
 
 // ── 合約下拉選單 ───────────────────────────────────────
-let _contractsData    = [];
+let _contractsData        = [];
 let _viewingNonLive       = false;  // 用戶正在查看尚未 ready 的系列
 let _viewingNonLiveSeries = null;   // 目標 series 名稱（e.g. "TXON04"）
 let _ready = false;  // fetchContracts 完成前封鎖 handleData，防止 WS 在初始化期間渲染舊資料
+
+// ── 損益視圖模式 ────────────────────────────────────────
+let _viewMode            = 'live';   // 'live' | 'weekly' | 'snapshot'
+let _lastLivePnl         = null;     // 最新 WS 推送的 live pnl（weekly 模式即時疊加用）
+let _weeklyPnlBaseline   = null;     // /api/weekly-pnl 結果（排除今天的快照加總）
+let _weeklyPnlCacheTime  = 0;        // baseline cache 時間戳（60s 內不重新 fetch）
+
+function _mergeWithLive(livePnl) {
+  if (!_weeklyPnlBaseline || !livePnl || !livePnl.strikes) return livePnl;
+  const allStrikes = [...new Set([..._weeklyPnlBaseline.strikes, ...livePnl.strikes])].sort((a, b) => a - b);
+  const baseMap = Object.fromEntries(_weeklyPnlBaseline.strikes.map((s, i) => [s, _weeklyPnlBaseline.pnl[i]]));
+  const liveMap = Object.fromEntries(livePnl.strikes.map((s, i) => [s, livePnl.pnl[i]]));
+  return { strikes: allStrikes, pnl: allStrikes.map(s => (baseMap[s] || 0) + (liveMap[s] || 0)) };
+}
+
+async function _loadWeeklyBaseline(series, settlementDate) {
+  const now = Date.now() / 1000;
+  const h = new Date().getHours(), m = new Date().getMinutes();
+  const sessionReset = h > 14 || (h === 14 && m >= 35);
+  // session_reset 狀態改變時強制重新 fetch（14:35 前後 cache 失效）
+  if (_weeklyPnlBaseline && now - _weeklyPnlCacheTime < 60
+      && _weeklyPnlBaseline._sessionReset === sessionReset) return;
+  try {
+    const params = new URLSearchParams({ series });
+    if (settlementDate) params.set('settlement_date', settlementDate);
+    const resp = await fetch(`/api/weekly-pnl?${params}`);
+    if (!resp.ok) return;
+    _weeklyPnlBaseline             = await resp.json();
+    _weeklyPnlBaseline._sessionReset = sessionReset;
+    _weeklyPnlCacheTime            = now;
+  } catch (e) {
+    console.warn('_loadWeeklyBaseline failed', e);
+  }
+}
+
+async function updateViewModeDropdown(series) {
+  const sel = document.getElementById('view-mode-select');
+  if (!sel) return;
+  // 清空舊快照選項（保留 live / weekly）
+  while (sel.options.length > 2) sel.remove(2);
+  try {
+    const daySeries = series.replace('N', '');
+    // 全日盤 + 日盤 各自 fetch，合併後按日期排序
+    const [r1, r2] = await Promise.all([
+      fetch(`/api/snapshots?series=${encodeURIComponent(series)}`),
+      fetch(`/api/snapshots?series=${encodeURIComponent(daySeries)}`),
+    ]);
+    const snaps1 = r1.ok ? (await r1.json()).snapshots || [] : [];
+    const snaps2 = r2.ok ? (await r2.json()).snapshots || [] : [];
+    const all = [...snaps1, ...snaps2].sort((a, b) => a.date.localeCompare(b.date) || a.series.localeCompare(b.series));
+    for (const snap of all) {
+      sel.appendChild(new Option(snap.label, `snapshot:${snap.filename}`));
+    }
+  } catch (e) {
+    console.warn('updateViewModeDropdown failed', e);
+  }
+}
 
 function _setViewingNonLive(series, contractData) {
   _viewingNonLive       = true;
@@ -631,14 +679,18 @@ async function fetchContracts() {
     } else {
       _switchSeries(defaultContract);
     }
+    // 填充損益視圖快照選單
+    updateViewModeDropdown(defaultContract.series);
 
     sel.onchange = () => {
-      _exitSnapshot();
+      _resetViewMode();
       const idx = parseInt(sel.value);
       const c   = _contractsData[idx];
       if (!c) return;
       document.getElementById('settlement-date').textContent = c.settlement_display;
       _updateSeriesCode();
+      // 重置損益視圖並更新快照列表
+      updateViewModeDropdown(c.series);
       if (!c.live) {
         // 系列尚未 ready：立刻顯示連線中進度，等待背景載入完成後自動切換
         _setViewingNonLive(c.series, c);
@@ -813,7 +865,7 @@ setInterval(() => {
 function handleData(data, source) {
   lastDataTime = Date.now();
   dataSource = source || 'WS';
-  if (_snapshotMode) return;  // 快照模式：忽略 live 資料
+  if (_viewMode === 'snapshot') return;  // 快照模式：忽略 live 資料
   if (!_ready) return;       // fetchContracts 尚未完成：不渲染任何資料
   const modeChanged = data.session_mode !== _currentSessionMode;
   _currentSessionMode = data.session_mode;
@@ -843,11 +895,19 @@ function handleData(data, source) {
   // series 切換：清空舊資料再 render，確保原子置換（不顯示舊 series 殘留）
   if (data.series && data.series !== _currentActiveSeries) {
     _clearDisplay();
+    _resetViewMode();   // 合約切換時重置損益視圖，防止舊合約 baseline 混入新合約 live
     _currentActiveSeries = data.series;
     _targetSeries = null;  // 目標已到達，清除過渡旗標
   }
+  // 永遠記錄最新 live pnl（weekly 模式即時疊加用）
+  _lastLivePnl = data.pnl;
+
   updateTable(data.table);
-  updateChart(data.pnl, modeChanged);
+  if (_viewMode === 'weekly') {
+    updateChart(_mergeWithLive(data.pnl), modeChanged);
+  } else {
+    updateChart(data.pnl, modeChanged);
+  }
   if (data.atm_strike) updateATMLine(data.atm_strike);
   if (data.implied_forward != null) { _impliedForward = data.implied_forward; _updatePnlStats(); }
   updateStatus(data.status, data.settlement);
@@ -923,44 +983,68 @@ setInterval(pollFallback, 2000);
 
 connect();
 
-// ── 快照模式 ─────────────────────────────────────────
-let _snapshotMode = false;
+// ── 損益視圖模式切換 ──────────────────────────────────
 
-const _snapshots = [
-  { btnId: 'btn-snapshot-20260326', data: typeof SNAPSHOT_20260326_03F4 !== 'undefined' ? SNAPSHOT_20260326_03F4 : null },
-  { btnId: 'btn-snapshot-20260327', data: typeof SNAPSHOT_20260327_03F4 !== 'undefined' ? SNAPSHOT_20260327_03F4 : null },
-];
+function _resetViewMode() {
+  _viewMode           = 'live';
+  _weeklyPnlBaseline  = null;
+  _weeklyPnlCacheTime = 0;
+  const sel = document.getElementById('view-mode-select');
+  if (sel) sel.value = 'live';
+  btnFull.classList.toggle('active', _currentSessionMode === 'full');
+  btnDay.classList.toggle('active',  _currentSessionMode === 'day');
+}
 
-_snapshots.forEach(({ btnId, data }) => {
-  const btn = document.getElementById(btnId);
-  if (!btn || !data) return;
+function _exitSnapshot() {
+  // 相容舊呼叫點（合約切換 onchange）
+  _resetViewMode();
+}
 
-  btn.addEventListener('click', () => {
-    if (_snapshotMode && btn.classList.contains('active')) {
-      _exitSnapshot();
-      return;
+document.getElementById('view-mode-select').addEventListener('change', async function () {
+  const val = this.value;
+
+  if (val === 'live') {
+    const wasSnapshot = (_viewMode === 'snapshot');
+    _viewMode = 'live';
+    _weeklyPnlBaseline = null;
+    // 從快照切回即時：永遠預設全日盤；否則維持目前 session
+    if (wasSnapshot) _setSessionMode('full');
+    else {
+      btnFull.classList.toggle('active', _currentSessionMode === 'full');
+      btnDay.classList.toggle('active',  _currentSessionMode === 'day');
     }
-    // 進入快照模式
-    _snapshotMode = true;
-    _snapshots.forEach(s => {
-      const b = document.getElementById(s.btnId);
-      if (b) b.classList.remove('active');
-    });
-    btn.classList.add('active');
+    // live 模式：下次 handleData 自然更新圖表
+
+  } else if (val === 'weekly') {
+    _viewMode = 'weekly';
     btnFull.classList.remove('active');
     btnDay.classList.remove('active');
+    // 取得當前 active series
+    const sel = document.getElementById('contract-select');
+    const c   = _contractsData[parseInt(sel.value)];
+    if (!c) return;
+    await _loadWeeklyBaseline(c.series, c.settlement_date);
+    // 立刻用最新 live pnl 重繪
+    if (_lastLivePnl) updateChart(_mergeWithLive(_lastLivePnl), true);
 
-    // 顯示快照資料
-    const snap = { ...data };
-    // 覆蓋工具列顯示
-    document.getElementById('last-updated').textContent = data._snapshot_time || '--';
-    document.getElementById('series-code').textContent  = 'TXYN03（快照）';
-
-    // 直接呼叫 updateTable / updateChart（繞過 handleData 以免被 live 模式判斷攔截）
-    _currentSessionMode = 'full';
-    updateTable(snap.table);
-    updateChart(snap.pnl, true);
-  });
+  } else if (val.startsWith('snapshot:')) {
+    const filename = val.slice('snapshot:'.length);
+    _viewMode = 'snapshot';
+    btnFull.classList.remove('active');
+    btnDay.classList.remove('active');
+    try {
+      const resp = await fetch(`/api/snapshots/${encodeURIComponent(filename)}`);
+      if (!resp.ok) return;
+      const snap = await resp.json();
+      document.getElementById('last-updated').textContent = `${snap.date} ${snap.time.slice(0,2)}:${snap.time.slice(2)}:00`;
+      if (snap.table) { _tableScrolled = false; updateTable(snap.table); }
+      if (snap.atm_strike) updateATMLine(snap.atm_strike);
+      if (snap.implied_forward != null) { _impliedForward = snap.implied_forward; _updatePnlStats(); }
+      updateChart({ strikes: snap.strikes, pnl: snap.pnl }, true);
+    } catch (e) {
+      console.warn('snapshot fetch failed', e);
+    }
+  }
 });
 
 // ── 左側面板拖拉調整寬度 ─────────────────────────────

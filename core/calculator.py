@@ -100,13 +100,16 @@ def _effective_price(o: OptionData, mm_online: bool = True) -> float:
     """
     選擇權即時有效價格，用於 Put-Call Parity：
     - mm_online=True 且 bid/ask 皆有效：用 (bid + ask) / 2（最準確）
-    - mm_online=False 或 bid/ask 任一為 0：改用 last_price（成交價）
-    - 兩者皆無時回傳 0（排除此履約價）
+    - mm_online=False：優先用 last_price（MM 撤單後成交價更可靠）
+    - last_price 為 0（例如 server 重啟後尚未累積）：fallback 回 bid/ask mid
+    - 皆無時回傳 0（排除此履約價）
     """
     if mm_online and o.bid_price > 0 and o.ask_price > 0:
         return (o.bid_price + o.ask_price) / 2
     if o.last_price > 0:
         return o.last_price
+    if o.bid_price > 0 and o.ask_price > 0:
+        return (o.bid_price + o.ask_price) / 2
     return 0.0
 
 

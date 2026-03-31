@@ -1,5 +1,39 @@
 # Changelog
 
+## v4.0 (2026-03-31)
+
+### 週累積損益快照功能（即時(當週全日盤累積)）
+
+#### 新增功能
+- **快照機制**：每日 13:45 自動存快照（`snapshots/{series}_{date}_1345.json`），含 strikes/pnl/table/atm_strike/implied_forward
+- **損益視圖下拉選單**（工具列）：
+  - 即時 (當盤)：現有即時功能不變
+  - 即時 (當週全日盤累積)：歷史快照 baseline + 當盤 live pnl 疊加
+  - 個別快照（YYYY-MM-DD HH:MM）：顯示歷史快照的損益圖與 T 字報價表
+- **`/api/snapshots`**：列出快照 metadata
+- **`/api/snapshots/{filename}`**：取得單張快照完整資料
+- **`/api/weekly-pnl?series=&settlement_date=`**：回傳合約 active 期間的快照加總
+- **`/api/force-snapshot?series=`**：強制用記憶體資料重建快照（繞過時間限制）
+
+#### 當週定義
+- `week_start` = 前一張合約結算後隔天（用 `taifex_calendar` 動態計算，正確處理清明等連假）
+- 今天快照納入規則：14:35 前排除（live 代表今天）；14:35 後納入（XQFAP 重整後 live 已是新合約）
+- 模擬驗證：50 個測試案例全過（含清明連假、單日合約、week_start 落假日等邊界條件）
+
+#### UI 行為
+- 切到快照或當週累積 → 全日盤/日盤按鈕藍底消除
+- 切回即時(當盤) → 恢復全日盤藍底（預設）
+- 合約切換（手動或伺服器自動推新 series）→ 損益視圖重置為即時，防止舊合約 baseline 混入
+
+#### 合成期貨修正
+- 日盤資料在 13:45 凍結，`calc_atm` 改用 `center_price=0`（two-step 從選擇權本身推算），不再用夜盤即時期貨價造成窗口偏移
+- `_effective_price` 新增 bid/ask fallback：MM 下線且 last_price=0（server 重啟後）仍可計算
+
+#### 樣式
+- 全日盤/日盤切換按鈕改為橘黃色（與快照選單視覺一致）
+
+---
+
 ## v3.17.1 (2026-03-31)
 
 ### Hotfix：修正 compute_payload() UnboundLocalError
