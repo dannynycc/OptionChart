@@ -3,6 +3,7 @@ calculator.py
 純計算邏輯，不依賴任何富邦 SDK。
 """
 
+import datetime
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -73,14 +74,36 @@ def parse_side(name: str) -> str:
     return '?'
 
 
-def _effective_price(o: OptionData) -> float:
+def _is_mm_online(settlement_date: str = "") -> bool:
+    """
+    判斷 market maker 是否在線。下列兩種情況視為下線，改用 last_price：
+    1. 夜盤深夜 02:00 ~ 開盤前 08:45：流動性極低，MM 已撤單
+    2. 結算日 12:30 後：MM 在結算前下線
+    """
+    now = datetime.datetime.now()
+    h, m = now.hour, now.minute
+
+    # 夜盤深夜 ~ 開盤前
+    if (h == 2 and m >= 0) or (3 <= h <= 7) or (h == 8 and m < 45):
+        return False
+
+    # 結算日 12:30 後
+    if settlement_date:
+        today = now.strftime("%Y-%m-%d")
+        if today == settlement_date and (h > 12 or (h == 12 and m >= 30)):
+            return False
+
+    return True
+
+
+def _effective_price(o: OptionData, mm_online: bool = True) -> float:
     """
     選擇權即時有效價格，用於 Put-Call Parity：
-    - 優先用 (bid + ask) / 2（market maker 在線時最準確）
-    - bid/ask 任一為 0 時（market maker 下線），改用即時成交價 last_price
+    - mm_online=True 且 bid/ask 皆有效：用 (bid + ask) / 2（最準確）
+    - mm_online=False 或 bid/ask 任一為 0：改用 last_price（成交價）
     - 兩者皆無時回傳 0（排除此履約價）
     """
-    if o.bid_price > 0 and o.ask_price > 0:
+    if mm_online and o.bid_price > 0 and o.ask_price > 0:
         return (o.bid_price + o.ask_price) / 2
     if o.last_price > 0:
         return o.last_price
@@ -91,6 +114,7 @@ def calc_atm(
     calls: list[OptionData],
     puts: list[OptionData],
     center_price: Optional[float] = None,
+    settlement_date: str = "",
 ) -> tuple[Optional[int], dict[int, float]]:
     """
     用 Put-Call Parity 估算合成期貨價格。
@@ -110,8 +134,9 @@ def calc_atm(
       implied       = 15 檔 F_K 平均值（四捨五入整數），即預估結算價
       synthetic_map = {履約價: F_K}，僅含參與計算的 15 檔（中心±7）
     """
-    call_map = {c.strike: _effective_price(c) for c in calls if _effective_price(c) > 0}
-    put_map  = {p.strike: _effective_price(p) for p in puts  if _effective_price(p) > 0}
+    mm_online = _is_mm_online(settlement_date)
+    call_map = {c.strike: _effective_price(c, mm_online) for c in calls if _effective_price(c, mm_online) > 0}
+    put_map  = {p.strike: _effective_price(p, mm_online) for p in puts  if _effective_price(p, mm_online) > 0}
     common   = sorted(set(call_map) & set(put_map))
     if not common:
         return None, {}, None

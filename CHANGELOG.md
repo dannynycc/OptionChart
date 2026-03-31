@@ -1,5 +1,24 @@
 # Changelog
 
+## v3.17 (2026-03-31)
+
+### 合成期貨計算：正確處理 Market Maker 下線時段
+
+#### 問題
+- `_effective_price()` 雖然在 bid/ask=0 時會 fallback 到 last_price，但若 XQFAP 在 MM 下線後短暫保留舊的非零 bid/ask（如快照殘留），仍會錯誤使用中間價計算 Put-Call Parity
+
+#### 修正
+- `core/calculator.py` — 新增 `_is_mm_online(settlement_date)` 函數，明確判斷兩個 MM 下線時段：
+  - **夜盤深夜 02:00 ~ 開盤前 08:45**：流動性極低，MM 已撤單
+  - **結算日 12:30 後**：MM 在結算前下線
+- `_effective_price(o, mm_online)` 新增 `mm_online` 參數：
+  - `mm_online=True` 且 bid/ask 皆有效 → `(bid + ask) / 2`
+  - `mm_online=False` 或 bid/ask 任一為 0 → `last_price`（兩道保險）
+- `calc_atm()` 新增 `settlement_date` 參數，傳入後計算 `mm_online` 狀態
+- `main.py` — `compute_payload()` 將已有的 `settlement` 傳入 `calc_atm()`
+
+---
+
 ## v3.16 (2026-03-31)
 
 ### 全日盤（TX1N04）優先 ready，啟動後 ~14s 即可顯示預設畫面
