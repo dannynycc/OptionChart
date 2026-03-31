@@ -1,5 +1,34 @@
 # Changelog
 
+## v3.14 (2026-03-31)
+
+### 切換非 live 合約：即時顯示連線中進度、清除殘留資料
+
+#### 問題
+- 切換到尚未載入完成（有點點）的合約時，右側損益圖的「價平」markLine 殘留舊值
+- X/Y 軸範圍（如 29200～37800）殘留舊合約資料
+- 下方 scrollbar 殘留舊合約範圍
+- 右上角「XX 個履約價」殘留舊數字
+- 狀態列仍顯示「已連線」，要等 1~2 秒後才變成「連線中」
+
+#### 修正
+- `static/index.html`：「個合約」改為「個履約價」（語意更精確）
+- `static/app.js` — `_clearDisplay()`：
+  - 清除 ATM 虛線：`markLine: { data: [] }`（ECharts merge mode 不會自動清除）
+  - 重置 X/Y 軸：`min: 'dataMin', max: 'dataMax'`
+  - 重置 noUiSlider：`updateOptions + set([0,1])`
+  - 清零 `sub-count` 顯示
+  - 重置 `_atmStrike = null`
+- `static/app.js` — 新增 `_setViewingNonLive(series, contractData)` helper：
+  - 整合設旗標、清畫面、立刻更新 UI 三步為一個函數
+  - 點選當下立即計算進度百分比並顯示 `連線中(X%)`，不等 5 秒 poll
+- `static/app.js` — `fetchContracts()` 兩處 call site 改用 `_setViewingNonLive()`
+- `static/app.js` — `updateStatus()` 加入 `_viewingNonLive` guard，避免 WebSocket 覆蓋「連線中」狀態
+- `static/app.js` — 5 秒 poll 新增進度更新邏輯（持續刷新百分比）
+- `main.py` — `/api/contracts` 回應新增 `total_count`（已訂閱履約價數）與 `loaded_count`（bid/avg > 0 的筆數），供前端計算載入進度
+
+---
+
 ## v3.13 (2026-03-31)
 
 ### 合約顯示邏輯重寫：3週選+1月選、15:00切換規則、月底跳月bug修正

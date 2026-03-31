@@ -550,6 +550,19 @@ let _contractsData    = [];
 let _viewingNonLive       = false;  // 用戶正在查看尚未 ready 的系列
 let _viewingNonLiveSeries = null;   // 目標 series 名稱（e.g. "TXON04"）
 
+function _setViewingNonLive(series, contractData) {
+  _viewingNonLive       = true;
+  _viewingNonLiveSeries = series;
+  _clearDisplay();
+  // 立刻更新 UI，不等下一次 poll
+  const pct = (contractData && contractData.total_count > 0)
+    ? Math.round(contractData.loaded_count / contractData.total_count * 100)
+    : 0;
+  document.getElementById('conn-dot').className    = 'dot dot-yellow';
+  document.getElementById('conn-label').textContent = `連線中(${pct}%)`;
+  document.getElementById('sub-count').textContent  = contractData ? contractData.loaded_count : 0;
+}
+
 function _clearDisplay() {
   const tb = document.getElementById('strike-table-body');
   tb.textContent = '';
@@ -558,13 +571,26 @@ function _clearDisplay() {
   _tableScrolled = false;
   _chartStrikes = [];
   _chartPnl     = [];
+  _atmStrike    = null;
   const statsEl = document.getElementById('pnl-stats');
   if (statsEl) statsEl.textContent = '';
+  // 清空 chart：含 markLine（ATM 價平虛線）、x/y 軸範圍
   chart.setOption({ series: [
     { name: '_pos',    data: [] },
     { name: '_neg',    data: [] },
-    { name: '合併損益', data: [] },
-  ]}, false);
+    { name: '合併損益', data: [], markLine: { data: [] } },
+  ], xAxis: { min: 'dataMin', max: 'dataMax' },
+     yAxis: { min: 'dataMin', max: 'dataMax' },
+  }, false);
+  // 重置 slider
+  if (_nouiSlider) {
+    _nouiSlider.updateOptions({ range: { min: 0, max: 1 } }, true);
+    _nouiSlider.set([0, 1]);
+    _sliderMin = 0;
+    _sliderMax = 0;
+  }
+  // 清 sub-count
+  document.getElementById('sub-count').textContent = '0';
 }
 
 async function fetchContracts() {
@@ -598,10 +624,8 @@ async function fetchContracts() {
     _updateSeriesCode();
     const defaultContract = list[defaultIdx];
     if (!defaultContract.live) {
-      // 預設合約尚未 ready → 清空畫面等待，與 onchange 邏輯一致
-      _viewingNonLive       = true;
-      _viewingNonLiveSeries = defaultContract.series;
-      _clearDisplay();
+      // 預設合約尚未 ready → 立刻顯示連線中進度
+      _setViewingNonLive(defaultContract.series, defaultContract);
     } else {
       _switchSeries(defaultContract);
     }
@@ -614,10 +638,8 @@ async function fetchContracts() {
       document.getElementById('settlement-date').textContent = c.settlement_display;
       _updateSeriesCode();
       if (!c.live) {
-        // 系列尚未 ready：立刻清空，等待背景載入完成後自動切換
-        _viewingNonLive       = true;
-        _viewingNonLiveSeries = c.series;
-        _clearDisplay();
+        // 系列尚未 ready：立刻顯示連線中進度，等待背景載入完成後自動切換
+        _setViewingNonLive(c.series, c);
       } else {
         // 系列已 ready：不先清空，等 handleData 收到新 series 資料後原子置換
         _viewingNonLive       = false;
@@ -697,6 +719,16 @@ setInterval(async () => {
     if (anyNewLive) {
       console.log('背景系列載入完成，下拉選單已更新');
     }
+    // 更新非 live 系列的載入進度顯示
+    if (_viewingNonLive && _viewingNonLiveSeries) {
+      const nc = list.find(c => c.series === _viewingNonLiveSeries);
+      if (nc && nc.total_count > 0) {
+        const pct = Math.round(nc.loaded_count / nc.total_count * 100);
+        document.getElementById('conn-dot').className   = 'dot dot-yellow';
+        document.getElementById('conn-label').textContent = `連線中(${pct}%)`;
+        document.getElementById('sub-count').textContent  = nc.loaded_count;
+      }
+    }
   } catch(e) {}
 }, 5000);
 
@@ -710,14 +742,16 @@ function updateStatus(status, settlement) {
   if (status) {
     const dot   = document.getElementById('conn-dot');
     const label = document.getElementById('conn-label');
-    if (status.connected) {
-      dot.className   = 'dot dot-green';
+    if (_viewingNonLive) {
+      // 非 live 系列：不覆寫「連線中」狀態，由 poll 負責更新
+    } else if (status.connected) {
+      dot.className     = 'dot dot-green';
       label.textContent = '已連線';
     } else {
-      dot.className   = 'dot dot-red';
+      dot.className     = 'dot dot-red';
       label.textContent = '斷線中...';
     }
-    if (status.subscribed_count) {
+    if (!_viewingNonLive && status.subscribed_count) {
       document.getElementById('sub-count').textContent = status.subscribed_count;
     }
     if (status.last_updated) {

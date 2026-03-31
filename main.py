@@ -383,7 +383,12 @@ async def api_contracts_get():
         c2   = dict(c)
         fs   = c['series']                 # full series e.g. "TX1N04"
         ds   = fs.replace('N', '')         # day series  e.g. "TX104"
-        c2['live'] = fs in _series_ready or ds in _series_ready
+        c2['live']         = fs in _series_ready or ds in _series_ready
+        c2['total_count']  = _subscribed_counts.get(fs, 0)
+        c2['loaded_count'] = sum(
+            1 for o in stores.get(fs, {}).values()
+            if o.bid_price > 0 or o.avg_price > 0
+        )
         result.append(c2)
     return {"contracts": result, "active_full": _active_full, "active_day": _active_day}
 
