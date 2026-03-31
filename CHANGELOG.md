@@ -1,5 +1,35 @@
 # Changelog
 
+## v3.13 (2026-03-31)
+
+### 合約顯示邏輯重寫：3週選+1月選、15:00切換規則、月底跳月bug修正
+
+#### 問題
+- 月底（如3/31）啟動時，`timedelta(days=31)` 導致掃描月份從3月直接跳到5月，4月合約全部消失
+- 啟動時只顯示 TXON05（5月月選），04W1/04F1/04W2/04 全部遺失
+- 未實作「3個最近週選＋1個月選」的固定顯示規則
+- 未實作 15:00 切換規則（結算日 15:00 後保留已結算合約、補入下一個、切換 default）
+- 啟動 race condition：feed 比 uvicorn 早完成第一個系列的探索，`POST /api/init` 失敗後不重試，導致 default 系列設錯
+
+#### 根本原因
+- `taifex_calendar.py:build_scan_plan()` 和 `xqfap_feed.py:_scan_valid_series()` 皆用 `timedelta(days=31)` 推算下個月，月底日期加 31 天會跳過月份
+- `xqfap_feed.py:main()` series 選取邏輯未依結算日排序，`[:3]` 切到的是前綴順序而非時間順序
+- 無 15:00 切換邏輯
+- `_post_init` 失敗後靜默跳過，uvicorn 起來後第二個系列搶先成為 active
+
+#### 修正
+- `taifex_calendar.py`：`build_scan_plan()` 月份計算改為 `((m-1) % 12) + 1` 正確跨月
+- `xqfap_feed.py`：`_scan_valid_series()` 同樣修正月份計算
+- `xqfap_feed.py`：series 選取邏輯全部重寫
+  - `weekly_all` / `monthly_all` 依結算日排序後再切片
+  - `after_cutoff = now.time() >= datetime.time(15, 0)`
+  - 15:00 前：取3個 `sd >= today` 週選 + 1個月選
+  - 15:00 後：保留今天結算的週選/月選 + 取3個 `sd > today` 週選 + 1個 `sd > today` 月選
+  - default 系列排第一位確保 `main.py` 正確設為 active
+- `xqfap_feed.py`：探索 loop 前加入 uvicorn 就緒等待（最多30秒輪詢 `/api/status`），解決 race condition
+
+---
+
 ## v3.12 (2026-03-30)
 
 ### 兩段式顯示修正、系列切換 UX 改善

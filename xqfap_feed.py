@@ -1230,8 +1230,8 @@ def _scan_valid_series(center: int) -> list[str]:
     test_strikes = [center, center + 50, center + 100, center + 150]
 
     for month_offset in range(2):   # 只掃當月 + 下個月
-        dt    = now + datetime.timedelta(days=month_offset * 31)
-        month = dt.strftime('%m')
+        m = now.month + month_offset
+        month = f"{((m - 1) % 12) + 1:02d}"
         for prefix in _ALL_PREFIXES:
             series = f"{prefix}N{month}"
             for strike in test_strikes:
@@ -1458,7 +1458,9 @@ def main():
     now   = datetime.datetime.now()
     today = now.date()
 
-    series_with_sd = []
+    # 計算所有 valid_series 的結算日（sd >= today 才保留）
+    after_cutoff = now.time() >= datetime.time(15, 0)
+    all_with_sd = []
     for series in valid_series:
         n_idx  = series.index('N')
         prefix = series[:n_idx]
@@ -1466,20 +1468,57 @@ def main():
         year   = now.year if month >= now.month else now.year + 1
         sd     = tc.settlement_date(prefix, year, month)
         if sd and sd >= today:
-            series_with_sd.append((series, str(sd)))
+            all_with_sd.append((series, sd, str(sd)))
 
-    if not series_with_sd:
+    if not all_with_sd:
         logger.error("找不到有效系列（結算日 >= 今天）！")
         sys.exit(1)
 
-    # 篩選：最近 3 個週選 + 最近 1 個月選
-    weekly  = [(s, sd) for s, sd in series_with_sd if not s.startswith('TXON')][:3]
-    monthly = [(s, sd) for s, sd in series_with_sd if s.startswith('TXON')][:1]
-    series_with_sd = sorted(weekly + monthly, key=lambda x: x[1])
-    logger.info(f"追蹤系列（3週+1月）：{[s for s, _ in series_with_sd]}")
+    # 分類：週選 / 月選（依結算日排序）
+    weekly_all  = sorted([(s, sd, sd_str) for s, sd, sd_str in all_with_sd if not s.startswith('TXON')], key=lambda x: x[1])
+    monthly_all = sorted([(s, sd, sd_str) for s, sd, sd_str in all_with_sd if     s.startswith('TXON')], key=lambda x: x[1])
+
+    # 篩選週選：3個尚未結算 + 若 15:00 後則額外保留今天結算的
+    if after_cutoff:
+        settling_today   = [(s, sd, sd_str) for s, sd, sd_str in weekly_all if sd == today]
+        unsettled_weekly = [(s, sd, sd_str) for s, sd, sd_str in weekly_all if sd >  today][:3]
+        selected_weekly  = settling_today + unsettled_weekly
+        default_series   = unsettled_weekly[0][0] if unsettled_weekly else None
+    else:
+        selected_weekly = weekly_all[:3]   # sd >= today，可包含今天結算的
+        default_series  = selected_weekly[0][0] if selected_weekly else None
+
+    # 月選同樣以 15:00 為切換點：15:00 後保留當天結算的，再取下一個
+    if after_cutoff:
+        settling_today_monthly  = [(s,sd,ss) for s,sd,ss in monthly_all if sd == today]
+        unsettled_monthly       = [(s,sd,ss) for s,sd,ss in monthly_all if sd >  today][:1]
+        selected_monthly        = settling_today_monthly + unsettled_monthly
+    else:
+        selected_monthly = monthly_all[:1]
+    selected_all     = sorted(selected_weekly + selected_monthly, key=lambda x: x[1])
+
+    # default 系列放第一位（main.py 以 i==0 決定 active）
+    if default_series:
+        selected_all = (
+            [(s, sd, sd_str) for s, sd, sd_str in selected_all if s == default_series] +
+            [(s, sd, sd_str) for s, sd, sd_str in selected_all if s != default_series]
+        )
+
+    series_with_sd = [(s, sd_str) for s, sd, sd_str in selected_all]
+    logger.info(f"追蹤系列（週選 {len(selected_weekly)} 個+月選 1 個）：{[s for s, _ in series_with_sd]}")
+    logger.info(f"預設主合約：{default_series}")
 
     _tracked_full_series = [s for s, _ in series_with_sd]
     _all_valid_series    = _tracked_full_series
+
+    # 等 uvicorn 就緒再開始 POST /api/init（避免 race condition）
+    for _wait in range(30):
+        try:
+            requests.get(f"{SERVER_URL}/api/status", timeout=2)
+            break
+        except Exception:
+            logger.info(f"等待 uvicorn 就緒... ({_wait+1}/30)")
+            time.sleep(1)
 
     # 啟動時一次性探索所有系列（advise 需要在 loop 啟動前知道全部合約）
     _all_metas = {}

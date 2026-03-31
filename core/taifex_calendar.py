@@ -167,8 +167,8 @@ def build_scan_plan(center: int) -> list[tuple[str, list[str]]]:
     test_offsets = [0, 50, 100, 150]
 
     for month_offset in range(12):
-        dt      = now + datetime.timedelta(days=month_offset * 31)
-        month   = dt.month
+        m = now.month + month_offset
+        month = ((m - 1) % 12) + 1
         prefixes = ALL_PREFIXES if month_offset < 2 else ["TXO"]
 
         for prefix in prefixes:
