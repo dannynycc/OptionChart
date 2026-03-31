@@ -62,12 +62,12 @@ def compute_payload() -> dict:
     with _lock:
         calls = [v for v in active.values() if v.side == 'C']
         puts  = [v for v in active.values() if v.side == 'P']
+    settlement       = _settlement_dates.get(active_key, "")
     pnl_result       = calc_combined_pnl(calls, puts)
     atm_strike, synthetic_map, implied_forward = calc_atm(calls, puts, center_price=_futures_price, settlement_date=settlement)
     table            = build_strike_table(calls, puts, current_index=atm_strike, synthetic_map=synthetic_map)
     last_updated     = _last_updated.get(active_key, 0.0)
     subscribed_count = _subscribed_counts.get(active_key, 0)
-    settlement       = _settlement_dates.get(active_key, "")
     return {
         "table":      table,
         "pnl":        pnl_result,

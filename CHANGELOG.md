@@ -1,5 +1,17 @@
 # Changelog
 
+## v3.17.1 (2026-03-31)
+
+### Hotfix：修正 compute_payload() UnboundLocalError
+
+#### 問題
+- v3.17 改動 `main.py` 時，將 `settlement_date=settlement` 加入 `calc_atm()` 呼叫（第 66 行），但 `settlement` 變數的賦值在第 70 行才出現，導致 `UnboundLocalError`，`/api/data` 全面回傳 500，頁面空白
+
+#### 修正
+- `main.py` — 將 `settlement = _settlement_dates.get(active_key, "")` 移至 `compute_payload()` 頂部（`calc_atm()` 呼叫之前）
+
+---
+
 ## v3.17 (2026-03-31)
 
 ### 合成期貨計算：正確處理 Market Maker 下線時段
