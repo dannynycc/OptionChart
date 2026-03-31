@@ -1,5 +1,21 @@
 # Changelog
 
+## v3.15 (2026-03-31)
+
+### 初始化期間封鎖 WS 渲染，防止右側面板在「載入中」時出現舊資料
+
+#### 問題
+- 頁面剛載入時，下拉選單仍顯示「載入中...」，但右側損益兩平、X/Y 軸、scrollbar 已充滿大量履約價資料
+- 根本原因：`fetchContracts()` 是 async，在 `await fetch()` 等待 HTTP 回應期間，`_viewingNonLive` 仍為初始值 `false`，WebSocket 資料直接進入 `handleData` 渲染流程，填滿右側面板
+- `fetchContracts()` 完成後雖會呼叫 `_setViewingNonLive()` → `_clearDisplay()` 清除，但使用者已看到一瞬間的亂資料
+
+#### 修正
+- `static/app.js`：新增 `_ready = false` 旗標（初始為 false）
+- `handleData()`：在 `_snapshotMode` 檢查後加入 `if (!_ready) return`，封鎖初始化期間的所有 WS 渲染
+- `fetchContracts()`：確定初始系列（live 或 non-live）之前設 `_ready = true`，之後的 WS 資料才正常處理
+
+---
+
 ## v3.14 (2026-03-31)
 
 ### 切換非 live 合約：即時顯示連線中進度、清除殘留資料

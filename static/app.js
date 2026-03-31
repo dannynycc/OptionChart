@@ -549,6 +549,7 @@ function updateTable(rows) {
 let _contractsData    = [];
 let _viewingNonLive       = false;  // 用戶正在查看尚未 ready 的系列
 let _viewingNonLiveSeries = null;   // 目標 series 名稱（e.g. "TXON04"）
+let _ready = false;  // fetchContracts 完成前封鎖 handleData，防止 WS 在初始化期間渲染舊資料
 
 function _setViewingNonLive(series, contractData) {
   _viewingNonLive       = true;
@@ -623,6 +624,7 @@ async function fetchContracts() {
       list[defaultIdx].settlement_display;
     _updateSeriesCode();
     const defaultContract = list[defaultIdx];
+    _ready = true;  // 初始系列確定，開放 handleData 渲染
     if (!defaultContract.live) {
       // 預設合約尚未 ready → 立刻顯示連線中進度
       _setViewingNonLive(defaultContract.series, defaultContract);
@@ -812,6 +814,7 @@ function handleData(data, source) {
   lastDataTime = Date.now();
   dataSource = source || 'WS';
   if (_snapshotMode) return;  // 快照模式：忽略 live 資料
+  if (!_ready) return;       // fetchContracts 尚未完成：不渲染任何資料
   const modeChanged = data.session_mode !== _currentSessionMode;
   _currentSessionMode = data.session_mode;
   if (modeChanged) {
