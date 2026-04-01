@@ -427,11 +427,9 @@ async def lifespan(app: FastAPI):
     os.makedirs(_SNAPSHOT_DIR, exist_ok=True)
     today_str = datetime.date.today().isoformat()
     for fname in os.listdir(_SNAPSHOT_DIR):
-        if fname.endswith('.json') and today_str in fname:
-            parts = fname.replace('.json', '').split('_')
-            # 格式：TX1N04_2026-03-31_1345.json → parts = ['TX1N04', '2026-03-31', '1345']
-            if len(parts) == 3:
-                _snapshot_taken_today[parts[0]] = parts[1]
+        parsed = _parse_snap_filename(fname)
+        if parsed and parsed['date'] == today_str and parsed['snap_type'] == 'daily':
+            _snapshot_taken_today[parsed['series']] = today_str
     if _snapshot_taken_today:
         logger.info(f"[snapshot] 今日已存快照：{_snapshot_taken_today}")
 
