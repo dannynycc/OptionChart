@@ -85,7 +85,7 @@ def _prev_contract_settlement(current_settlement_str: str) -> datetime.date:
 
 
 def _union_pnl(snapshots: list[dict]) -> dict:
-    """多張快照的 strikes union 後逐點相加，缺失補 0。"""
+    """多張快照的 strikes union 後逐點相加，缺失補 0。（舊算法，保留供 fallback）"""
     if not snapshots:
         return {"strikes": [], "pnl": []}
     all_strikes = sorted(set(s for snap in snapshots for s in snap["strikes"]))
@@ -97,6 +97,52 @@ def _union_pnl(snapshots: list[dict]) -> dict:
                 val += snap["pnl"][snap["strikes"].index(strike)]
         pnl.append(round(val, 4))
     return {"strikes": all_strikes, "pnl": pnl}
+
+
+def _virtual_twin_pnl(snapshots: list[dict], live_strikes: list[int]) -> dict:
+    """
+    虛擬孿生 baseline 算法：以今天 live_strikes 為全域 settlement 軸，
+    對每個歷史快照的原始部位（raw_calls/raw_puts）重新計算全市場 pnl，再相加。
+
+    核心差異：
+      舊法：settlement=K 若該快照無此 strike → 填 0 → 邊界懸崖
+      新法：settlement=K，用快照裡所有真實存在的 strike 計算 intrinsic，
+            加總後仍為非零且連續 → 平滑曲線
+
+    Backward compat：若快照缺少 raw_calls/raw_puts（舊格式），
+    fallback 用預先計算的 pnl 字典查表補零。
+    """
+    if not live_strikes:
+        return {"strikes": [], "pnl": []}
+
+    total: dict[int, float] = {s: 0.0 for s in live_strikes}
+
+    for snap in snapshots:
+        raw_calls = snap.get("raw_calls")
+        raw_puts  = snap.get("raw_puts")
+
+        if raw_calls is not None and raw_puts is not None:
+            # 新格式：虛擬孿生重算
+            for settlement in live_strikes:
+                c_sum = sum(
+                    (max(settlement - c["strike"], 0) - c["avg_price"]) * c["net_pos"]
+                    for c in raw_calls
+                )
+                p_sum = sum(
+                    (max(p["strike"] - settlement, 0) - p["avg_price"]) * p["net_pos"]
+                    for p in raw_puts
+                )
+                total[settlement] += (c_sum + p_sum) * 50 / 100_000_000
+        else:
+            # 舊格式 fallback：直接查表，缺失補 0
+            pnl_map = dict(zip(snap.get("strikes", []), snap.get("pnl", [])))
+            for settlement in live_strikes:
+                total[settlement] += pnl_map.get(settlement, 0.0)
+
+    return {
+        "strikes": live_strikes,
+        "pnl":     [round(total[s], 4) for s in live_strikes],
+    }
 
 
 def _try_save_snapshot(series: str) -> bool:
@@ -135,6 +181,14 @@ def _try_save_snapshot(series: str) -> bool:
     os.makedirs(_SNAPSHOT_DIR, exist_ok=True)
     fname = f"{series}_{today}_1345.json"
     path  = os.path.join(_SNAPSHOT_DIR, fname)
+    raw_calls = [
+        {"strike": c.strike, "net_pos": c.net_position, "avg_price": c.avg_premium}
+        for c in calls if c.net_position != 0 or c.avg_premium > 0
+    ]
+    raw_puts = [
+        {"strike": p.strike, "net_pos": p.net_position, "avg_price": p.avg_premium}
+        for p in puts if p.net_position != 0 or p.avg_premium > 0
+    ]
     snapshot = {
         "series":  series,
         "date":    today,
@@ -144,11 +198,13 @@ def _try_save_snapshot(series: str) -> bool:
         "table":           table,
         "atm_strike":      atm,
         "implied_forward": implied_forward,
+        "raw_calls":       raw_calls,
+        "raw_puts":        raw_puts,
     }
     with open(path, 'w', encoding='utf-8') as f:
         json.dump(snapshot, f, ensure_ascii=False)
     _snapshot_taken_today[series] = today
-    logger.info(f"[snapshot] 已存 {fname}")
+    logger.info(f"[snapshot] 已存 {fname}，raw_calls={len(raw_calls)}, raw_puts={len(raw_puts)}")
     return True
 
 
@@ -632,7 +688,14 @@ async def api_weekly_pnl(series: str = "", settlement_date: str = ""):
     except Exception as e:
         logger.warning(f"api_weekly_pnl error: {e}")
 
-    result = _union_pnl(snapshots)
+    # 取今天 live strike 列表作為全域 settlement 軸（以傳入 series 的全日盤為準）
+    live_series = series if series and series in stores else _active_full
+    live_store  = stores.get(live_series, {})
+    with _lock:
+        live_options = list(live_store.values())
+    live_strikes = sorted(set(o.strike for o in live_options))
+
+    result = _virtual_twin_pnl(snapshots, live_strikes)
     result["week_start"] = week_str
     result["sources"] = [f"{s['series']}_{s['date']}" for s in snapshots]
     return result
@@ -659,6 +722,14 @@ async def api_force_snapshot(series: str = ""):
     os.makedirs(_SNAPSHOT_DIR, exist_ok=True)
     fname = f"{series}_{today}_1345.json"
     path  = os.path.join(_SNAPSHOT_DIR, fname)
+    raw_calls = [
+        {"strike": c.strike, "net_pos": c.net_position, "avg_price": c.avg_premium}
+        for c in calls if c.net_position != 0 or c.avg_premium > 0
+    ]
+    raw_puts = [
+        {"strike": p.strike, "net_pos": p.net_position, "avg_price": p.avg_premium}
+        for p in puts if p.net_position != 0 or p.avg_premium > 0
+    ]
     snapshot = {
         "series":          series,
         "date":            today,
@@ -668,11 +739,13 @@ async def api_force_snapshot(series: str = ""):
         "table":           table,
         "atm_strike":      atm,
         "implied_forward": implied_forward,
+        "raw_calls":       raw_calls,
+        "raw_puts":        raw_puts,
     }
     with open(path, 'w', encoding='utf-8') as f:
         json.dump(snapshot, f, ensure_ascii=False)
     _snapshot_taken_today[series] = today
-    logger.info(f"[force-snapshot] 強制重建 {fname}，{len(result['strikes'])} 個履約價")
+    logger.info(f"[force-snapshot] 強制重建 {fname}，{len(result['strikes'])} 個履約價，raw_calls={len(raw_calls)}, raw_puts={len(raw_puts)}")
     return {"ok": True, "filename": fname, "strikes_count": len(result["strikes"])}
 
 

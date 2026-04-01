@@ -1,5 +1,29 @@
 # Changelog
 
+## v4.5 (2026-04-01)
+
+### 即時(當週全日盤累積) baseline 算法重寫：虛擬孿生 T 字報價表
+
+#### 問題
+舊算法（`_union_pnl`）將每天快照的 pre-computed `pnl[]` 直接對齊 strike union 後相加，缺失的 strike 填 0，導致曲線在各快照 strike 邊界出現明顯懸崖與鋸齒（例：settlement=30850 不在 Day-2 快照 → 填 0 → 從 30800 的 -0.017 跳到 0 再跳回 30900 的 -0.0168）。
+
+#### 解法：虛擬孿生算法（`_virtual_twin_pnl`）
+- **全域 settlement 軸**：以今天 live strike 列表作為唯一的 x 軸（最完整），所有歷史快照統一在此軸上計算。
+- **重新計算而非查表**：對每個歷史快照，用其原始部位（`raw_calls`/`raw_puts`）在「今天全部 strike」重算損益，而非查 pre-computed `pnl[]`。某天不存在的 strike 自然不貢獻（乘以 0），但其他 strike 的 intrinsic 仍連續遞增 → 曲線平滑。
+- **`baseline = Σ pnl_d(settlement)`**（各天重算後加總）；再加 live pnl = 完整當週累積。
+
+#### 格式升級
+- 快照新增 `raw_calls`/`raw_puts` 欄位：每筆 `{strike, net_pos, avg_price}`，供新算法重算使用。
+- `_try_save_snapshot` 與 `api_force_snapshot` 均同步更新。
+- 舊快照 backward compat：自動從 `table` 欄位補填 `raw_calls`/`raw_puts`（migration 腳本內建於 `_virtual_twin_pnl` fallback）。
+
+#### 效果
+- 修正前最大跳變：29200→29300 diff=5.64 億（懸崖）
+- 修正後最大跳變：37700→37800 diff=1.55 億（正常線性遞增，無懸崖）
+- 低端 28500~29400 每 100 點差值均勻約 0.81 億，完全平滑
+
+---
+
 ## v4.0 (2026-03-31)
 
 ### 週累積損益快照功能（即時(當週全日盤累積)）
