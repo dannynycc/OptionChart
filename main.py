@@ -230,7 +230,10 @@ def _try_save_snapshot(series: str) -> bool:
     """
     若 last_updated[series] >= 今天 13:45 且今天尚未存過，則存快照。
     全日盤（含 N）和日盤各自獨立觸發。回傳 True 表示本次有存檔。
+    只對 active series（_active_full / _active_day）存檔，其餘略過。
     """
+    if series not in (_active_full, _active_day):
+        return False
     ts = _last_updated.get(series, 0.0)
     if not ts:
         return False

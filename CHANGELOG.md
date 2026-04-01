@@ -1,5 +1,15 @@
 # Changelog
 
+## v4.9 (2026-04-01)
+
+### 快照存檔限制為 active 合約 + 清理無用快照
+
+#### 修正
+- **`_try_save_snapshot`**：加入 `series not in (_active_full, _active_day)` guard，只對當前 active 合約存快照，其餘已初始化的系列不再產生快照檔
+- **刪除 17 個無用快照**：清除非 04W1（TX1N04/TX104）合約在其 week_start 之前累積的快照（TXUN04/TXU04/TXVN04/TXV04/TX2N04/TX204/TXON04/TXO04）
+
+---
+
 ## v4.8 (2026-04-01)
 
 ### 快照檔命名規則統一
