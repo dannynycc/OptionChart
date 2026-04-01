@@ -880,11 +880,17 @@ def _bulk_request_series(full_series: str):
                         d_vol_str   = _req_thread(f"{day_sym}.TF-TotalVolume")
                         d_ratio_str = _req_thread(f"{day_sym}.TF-InOutRatio")
                         d_avg_str   = _req_thread(f"{day_sym}.TF-AvgPrice")
+                        d_bid_str   = _req_thread(f"{day_sym}.TF-Bid")
+                        d_ask_str   = _req_thread(f"{day_sym}.TF-Ask")
+                        d_last_str  = _req_thread(f"{day_sym}.TF-Price")
                         d_vol   = int(float(d_vol_str)) if d_vol_str else 0
                         d_ratio = _to_float(d_ratio_str)
                         d_avg   = _to_float(d_avg_str)
                         local_day.append({'symbol': day_sym, 'trade_volume': d_vol,
                                           'inout_ratio': d_ratio, 'avg_price': d_avg,
+                                          'bid_price': _to_float(d_bid_str),
+                                          'ask_price': _to_float(d_ask_str),
+                                          'last_price': _to_float(d_last_str),
                                           '_day_sym': day_sym, '_ratio': d_ratio, '_vol': d_vol})
                     with merge_lock_day:
                         day_results.extend(local_day)
@@ -1109,8 +1115,14 @@ def _advise_loop():
         if msg.message == _WM_TIMER:
             elapsed = time.time() - _last_callback_time
             if _last_callback_time > 0 and elapsed > _WATCHDOG_THRESHOLD:
-                logger.warning(f"[watchdog] {elapsed:.0f}s 無 ADVDATA，嘗試重新連線")
-                _reconnect_and_resubscribe()
+                _now_t = datetime.datetime.now().time()
+                # 盤後（14:30~08:30）DDEML 本就不推 callback，跳過 watchdog 重連
+                _after_market = _now_t >= datetime.time(14, 30) or _now_t < datetime.time(8, 30)
+                if _after_market:
+                    pass  # 盤後靜默，不重連不重 init
+                else:
+                    logger.warning(f"[watchdog] {elapsed:.0f}s 無 ADVDATA，嘗試重新連線")
+                    _reconnect_and_resubscribe()
             continue
 
         if msg.message == _WM_APP_REINIT:
@@ -1212,6 +1224,24 @@ def _reinit():
                       json={'keep': list(new_metas.keys())}, timeout=5)
     except Exception as e:
         logger.warning(f"purge-series 失敗：{e}")
+    # 切換 active series 為新 default：after_cutoff 跳過今天結算的，取第一個未結算
+    new_full_list = [s for s in new_metas if 'N' in s]
+    if new_full_list:
+        _today_str    = datetime.date.today().isoformat()
+        _after_cutoff = datetime.datetime.now().time() >= datetime.time(14, 30)
+        if _after_cutoff:
+            _unsettled = [s for s in new_full_list if _series_sd.get(s, "9999") > _today_str]
+            new_default_full = _unsettled[0] if _unsettled else new_full_list[0]
+        else:
+            new_default_full = new_full_list[0]
+        new_default_day  = new_default_full.replace('N', '')
+        try:
+            requests.post(f"{SERVER_URL}/api/set-series",
+                          json={'series_full': new_default_full, 'series_day': new_default_day},
+                          timeout=5)
+            logger.info(f"[reinit] 已切換 active → {new_default_full} / {new_default_day}")
+        except Exception as e:
+            logger.warning(f"[reinit] set-series 失敗：{e}")
 
 
 def _auto_reinit_scheduler():
@@ -1514,7 +1544,7 @@ def main():
     today = now.date()
 
     # 計算所有 valid_series 的結算日（sd >= today 才保留）
-    after_cutoff = now.time() >= datetime.time(15, 0)
+    after_cutoff = now.time() >= datetime.time(14, 30)
     all_with_sd = []
     for series in valid_series:
         n_idx  = series.index('N')
@@ -1592,6 +1622,7 @@ def main():
         _all_prevs[day_series]  = {}
         _post_init(contracts_full, full_series, sd_str)
         _post_init(contracts_day,  day_series,  sd_str)
+        _post_contracts(_all_valid_series)   # _post_init 完成即更新前端下拉選單，不等慢速快照
         if i == 0:  # 只對 active series 做初始快照；其餘由 bg_poll 第一輪更新
             _push_snapshot(meta_full, full_series)
             # 立刻開始 DDEML 全量（Phase1 TX1N04 並行於 TX104 push_snapshot）
@@ -1603,7 +1634,6 @@ def main():
             logger.info(f"跳過 push_snapshot [{full_series}]，立即背景載入")
             threading.Thread(target=_bulk_request_series,
                              args=(full_series,), daemon=True).start()
-        _post_contracts(_all_valid_series)
 
     if not _all_metas:
         logger.error("所有系列探索失敗！")

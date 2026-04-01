@@ -60,6 +60,15 @@ _ws_connect_count: int = 0   # 累計 WS 連線次數（刷新頁面會 +1）
 _SNAPSHOT_DIR         = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'snapshots')
 _snapshot_taken_today: dict[str, str] = {}  # series → date_str（已存快照的日期，防重複）
 
+def _series_last_updated(series: str) -> float:
+    """回傳 series 的資料時間戳。已結算合約固定回傳結算日 13:45:00，避免顯示誤導時間。"""
+    sd = _settlement_dates.get(series, "")
+    if sd:
+        now = datetime.datetime.now()
+        if sd <= now.date().isoformat() and now.time() >= datetime.time(13, 45):
+            return datetime.datetime.fromisoformat(f"{sd} 13:45:00").timestamp()
+    return _last_updated.get(series, 0.0)
+
 # ── 快照邏輯 ──────────────────────────────────────────────────
 
 def _prev_contract_settlement(current_settlement_str: str) -> datetime.date:
@@ -205,7 +214,64 @@ def _try_save_snapshot(series: str) -> bool:
         json.dump(snapshot, f, ensure_ascii=False)
     _snapshot_taken_today[series] = today
     logger.info(f"[snapshot] 已存 {fname}，raw_calls={len(raw_calls)}, raw_puts={len(raw_puts)}")
+
+    # 全日盤系列額外存「當週全日盤累積」快照
+    if 'N' in series:
+        _try_save_weekly_snapshot(series, today, result["strikes"], result["pnl"])
+
     return True
+
+
+def _try_save_weekly_snapshot(
+    series: str, today: str,
+    today_strikes: list, today_pnl: list,
+):
+    """
+    在 1345 快照存完後，立刻計算當週全日盤累積（baseline＋今天）並存檔。
+    today_strikes/today_pnl/today_raw_calls/today_raw_puts 直接從記憶體傳入，不重讀磁碟。
+    baseline = 前幾天快照的 virtual twin pnl（不含今天）
+    週累積 = baseline + today_pnl（直接逐點相加，共用 today_strikes 為 settlement 軸）
+    """
+    settlement_date = _settlement_dates.get(series, "")
+    try:
+        prev_settle = _prev_contract_settlement(settlement_date)
+        week_start  = prev_settle + datetime.timedelta(days=1)
+    except Exception:
+        week_start = datetime.date.fromisoformat(today) - datetime.timedelta(days=datetime.date.fromisoformat(today).weekday())
+    week_str = week_start.isoformat()
+
+    # 只載前幾天（不含今天）的快照作為 baseline
+    prev_snapshots = []
+    for fname in sorted(os.listdir(_SNAPSHOT_DIR)):
+        if not fname.endswith('_1345.json') or not fname.startswith(series + '_'):
+            continue
+        parts = fname.replace('.json', '').split('_')
+        if len(parts) != 3:
+            continue
+        _, date, _ = parts
+        if date < week_str or date >= today:   # 嚴格小於今天
+            continue
+        with open(os.path.join(_SNAPSHOT_DIR, fname), 'r', encoding='utf-8') as f:
+            prev_snapshots.append(json.load(f))
+
+    # baseline：前幾天在 today_strikes 軸上重算
+    baseline = _virtual_twin_pnl(prev_snapshots, today_strikes)
+    # 週累積 = baseline + 今天 live pnl（逐點相加）
+    weekly_pnl = [round(baseline["pnl"][i] + today_pnl[i], 4) for i in range(len(today_strikes))]
+
+    sources = [f"{s['series']}_{s['date']}" for s in prev_snapshots] + [f"{series}_{today}"]
+    weekly_path = os.path.join(_SNAPSHOT_DIR, f"{series}_{today}_weekly.json")
+    with open(weekly_path, 'w', encoding='utf-8') as f:
+        json.dump({
+            "series":     series,
+            "date":       today,
+            "time":       "weekly",
+            "strikes":    today_strikes,
+            "pnl":        weekly_pnl,
+            "week_start": week_str,
+            "sources":    sources,
+        }, f, ensure_ascii=False)
+    logger.info(f"[weekly-snapshot] 已存 {series}_{today}_weekly.json，來源：{sources}")
 
 
 # ── 計算 payload ──────────────────────────────────────────────
@@ -223,7 +289,7 @@ def compute_payload() -> dict:
     center_price     = _futures_price if _session_mode == 'full' else 0
     atm_strike, synthetic_map, implied_forward = calc_atm(calls, puts, center_price=center_price, settlement_date=settlement)
     table            = build_strike_table(calls, puts, current_index=atm_strike, synthetic_map=synthetic_map)
-    last_updated     = _last_updated.get(active_key, 0.0)
+    last_updated     = _series_last_updated(active_key)
     subscribed_count = _subscribed_counts.get(active_key, 0)
     return {
         "table":      table,
@@ -424,7 +490,12 @@ async def api_feed(updates: list[FeedItem], series: str = ""):
                 value_changed += 1
 
     if found > 0:
-        _last_updated[series] = time.time()   # 有收到合約資料即更新（含盤後無變動）
+        # 已結算合約（settlement_date <= 今天 且已過 13:45）不再更新時間戳
+        _sd  = _settlement_dates.get(series, "")
+        _now = datetime.datetime.now()
+        _settled = bool(_sd and _sd <= _now.date().isoformat() and _now.time() >= datetime.time(13, 45))
+        if not _settled:
+            _last_updated[series] = time.time()   # 有收到合約資料即更新（含盤後無變動）
         _try_save_snapshot(series)            # 若已到 13:45 且今天尚未存過，觸發快照
     if value_changed:
         # 只有當前 active series 更新才廣播（背景 series 靜默儲存）
@@ -458,6 +529,11 @@ async def api_get_session():
 async def api_heartbeat(series: str = ""):
     """bg_poll 心跳：只更新 last_updated 時間戳，不推送資料"""
     if series and series in stores:
+        # 已結算合約（settlement_date <= 今天 且已過 13:45）不再更新時間戳
+        sd  = _settlement_dates.get(series, "")
+        now = datetime.datetime.now()
+        if sd and sd <= now.date().isoformat() and now.time() >= datetime.time(13, 45):
+            return {"ok": True}
         _last_updated[series] = time.time()
     return {"ok": True}
 
@@ -600,13 +676,23 @@ async def get_status():
         "connected":        _connected,
         "subscribed_count": _subscribed_counts.get(active_key, 0),
         "settlement_date":  _settlement_dates.get(active_key, ""),
-        "last_updated":     _last_updated.get(active_key, 0.0),
+        "last_updated":     _series_last_updated(active_key),
         "error":            None,
     }
 
 @app.get("/api/snapshots")
-async def api_snapshots(series: str = ""):
-    """回傳 snapshots/ 資料夾中屬於指定 series 的所有快照 metadata，按日期排序。"""
+async def api_snapshots(series: str = "", settlement_date: str = ""):
+    """回傳 snapshots/ 資料夾中屬於指定 series 的所有快照 metadata，按日期排序。
+    全日盤系列加上 week_start 過濾，只顯示合約 active 期間的快照。"""
+    # 計算 week_start（同 api_weekly_pnl 邏輯）
+    week_str = ""
+    if settlement_date:
+        try:
+            prev_settle = _prev_contract_settlement(settlement_date)
+            week_str    = (prev_settle + datetime.timedelta(days=1)).isoformat()
+        except Exception:
+            pass
+
     result = []
     try:
         for fname in sorted(os.listdir(_SNAPSHOT_DIR)):
@@ -618,8 +704,14 @@ async def api_snapshots(series: str = ""):
             if len(parts) != 3:
                 continue
             s, date, t = parts
+            # 有 week_start：過濾掉 active 期間之前的快照（全日盤與日盤皆適用）
+            if week_str and date < week_str:
+                continue
             session = "全日盤" if 'N' in s else "日盤"
-            label = f"{date} {t[:2]}:{t[2:]} ({session})"
+            if t == "weekly":
+                label = f"{date} 當週全日盤累積"
+            else:
+                label = f"{date} {t[:2]}:{t[2:]} ({session})"
             result.append({"filename": fname, "series": s, "date": date, "time": t, "label": label})
     except Exception as e:
         logger.warning(f"api_snapshots error: {e}")
@@ -648,8 +740,19 @@ async def api_weekly_pnl(series: str = "", settlement_date: str = ""):
       - 14:35 前：live pnl 仍代表今天 → 排除今天快照
       - 14:35 後：live pnl 已重整 → 納入今天快照
     若無 settlement_date，fallback 為本週一。
+    已結算合約（settlement_date <= 今天 且時間 >= 13:45）：直接回傳 weekly 快照，不重算。
     """
     now       = datetime.datetime.now()
+    # 已結算合約：直接讀 weekly 快照，避免因 live_strikes 漂移導致曲線不一致
+    if series and settlement_date:
+        _sd_now = now.date().isoformat()
+        if settlement_date <= _sd_now and now.time() >= datetime.time(13, 45):
+            _weekly_file = os.path.join(_SNAPSHOT_DIR, f"{series}_{settlement_date}_weekly.json")
+            if os.path.exists(_weekly_file):
+                with open(_weekly_file, 'r', encoding='utf-8') as _f:
+                    _data = json.load(_f)
+                    _data['_settled'] = True   # 前端 _mergeWithLive 用此旗標，不再疊加 live_pnl
+                    return _data
     today     = now.date()
     today_str = today.isoformat()
 

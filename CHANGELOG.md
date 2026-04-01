@@ -1,5 +1,35 @@
 # Changelog
 
+## v4.6 (2026-04-01)
+
+### 結算後合約穩定性 + 盤後 watchdog 靜默
+
+#### 問題
+1. 已結算合約（04W1）資料時間持續刷新，不應變動
+2. 即時(當週全日盤累積) 與 2026-04-01 當週全日盤累積 圖表不一致（double count）
+3. 盤後 watchdog 因 DDEML 不推 callback 而每 3 分鐘觸發 reinit，導致畫面反覆斷線出不來
+4. 合約下拉選單在 watchdog reinit 循環中永遠空白（`_post_contracts` 被 push_snapshot 卡住）
+5. 盤後重啟後 active 合約選到已結算的 TX1N04 而非 TXUN04
+6. 日盤（TX104 等）切換後 bid/ask/成交價全空（Phase 2 bulk_req 未抓這三個欄位）
+
+#### 修正
+- **`main.py`**
+  - `_series_last_updated(series)`：已結算合約固定回傳 `{結算日} 13:45:00` timestamp，兩條回傳路徑（`api_feed`/`api_status`）統一使用
+  - `/api/update`：已結算合約不更新 `_last_updated`（封堵 heartbeat 以外的刷新路徑）
+  - `/api/heartbeat`：已結算合約直接 return，不更新時間戳
+  - `api_weekly_pnl`：已結算合約直接回傳 `{series}_{date}_weekly.json` 並標記 `_settled: True`，避免因 live_strikes 漂移重算導致曲線不一致
+- **`static/app.js`**
+  - `_mergeWithLive`：baseline 帶有 `_settled` 旗標時直接回傳 baseline，不疊加 live_pnl（修正 double count）
+  - `setInterval` 斷線偵測：已結算合約（`_activeSettlementDate <= today` 且 >= 13:45）跳過 feed-dead toast
+  - `updateStatus`：從 `status.settlement_date` 更新 `_activeSettlementDate`
+- **`xqfap_feed.py`**
+  - `_advise_loop` WM_TIMER handler：盤後（14:30~08:30）跳過 watchdog 重連，不再觸發 reinit
+  - 初始化 loop：`_post_contracts` 移至 `_post_init` 完成後立刻呼叫，不等慢速 push_snapshot（修正 contracts 空白）
+  - `_reinit` 切換 active：after_cutoff 後跳過已結算合約，選第一個未結算 full series
+  - Phase 2 `_bulk_request_series`：`_worker_day` 補抓 `Bid/Ask/Price` 三個欄位（修正日盤報價空白）
+
+---
+
 ## v4.5 (2026-04-01)
 
 ### 即時(當週全日盤累積) baseline 算法重寫：虛擬孿生 T 字報價表
