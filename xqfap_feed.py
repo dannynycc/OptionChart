@@ -634,14 +634,17 @@ def _fetch_one_changed(series: str, symbol: str, new_vol: int):
         d_vol_str   = _req_thread(f"{day_sym}.TF-TotalVolume")
         d_ratio_str = _req_thread(f"{day_sym}.TF-InOutRatio")
         d_avg_str   = _req_thread(f"{day_sym}.TF-AvgPrice")
+        d_last_str  = _req_thread(f"{day_sym}.TF-Price")
         d_vol   = int(float(d_vol_str)) if d_vol_str else 0
         d_ratio = _to_float(d_ratio_str)
         d_avg   = _to_float(d_avg_str)
+        d_last  = _to_float(d_last_str)
         day_prev = _all_prevs.get(day_series)
         if day_prev is not None:
             day_prev[day_sym] = (d_ratio, d_vol)
         day_item = {'series': day_series, 'symbol': day_sym,
-                    'trade_volume': d_vol, 'inout_ratio': d_ratio, 'avg_price': d_avg}
+                    'trade_volume': d_vol, 'inout_ratio': d_ratio, 'avg_price': d_avg,
+                    'last_price': d_last}
 
     return full_item, day_item
 
@@ -744,6 +747,29 @@ def _quote_poll_worker():
             logger.info(f"[quote_poll] {len(symbols)} 合約，{len(changed)} 筆變化，耗時 {elapsed*1000:.0f}ms")
             if changed:
                 _post_feed(changed, series)
+                # 08:45~13:45 日盤時間內：bid/ask/last 三欄位完全 mirror 到 day series
+                # 13:45 後停止：XQFAP 重整後 TX1N04 進入夜盤，兩邊各自獨立，不再 mirror
+                day_series = series.replace('N', '')
+                _now = datetime.datetime.now().time()
+                if (day_series != series and day_series in _all_metas
+                        and datetime.time(8, 45) <= _now <= datetime.time(13, 45)):
+                    day_meta    = _all_metas[day_series]
+                    day_changed = []
+                    for item in changed:
+                        day_sym = item['symbol'].replace(series, day_series, 1)
+                        if day_sym in day_meta:
+                            day_changed.append({
+                                'symbol':       day_sym,
+                                'trade_volume': 0,
+                                'bid_price':    item['bid_price'],
+                                'ask_price':    item['ask_price'],
+                                'last_price':   item['last_price'],
+                            })
+                    if day_changed:
+                        logger.info(f"[mirror] {day_series} {len(day_changed)} 筆 bid/ask/last")
+                        _post_feed(day_changed, day_series)
+                else:
+                    logger.debug(f"[mirror] skip: day_series={day_series!r} in_metas={day_series in _all_metas}")
             _push_futures_price()
 
 

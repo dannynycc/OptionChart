@@ -312,9 +312,9 @@ class FeedItem(BaseModel):
     bid_match_day:    int   = -1
     ask_match_day:    int   = -1
     trade_volume_day: int   = -1
-    bid_price:        float = 0.0
-    ask_price:        float = 0.0
-    last_price:       float = 0.0
+    bid_price:        float = -1.0
+    ask_price:        float = -1.0
+    last_price:       float = -1.0
 
 @app.post("/api/feed")
 async def api_feed(updates: list[FeedItem], series: str = ""):
@@ -357,13 +357,13 @@ async def api_feed(updates: list[FeedItem], series: str = ""):
                 opt.trade_volume_day = u.trade_volume_day
             if u.avg_price > 0:
                 opt.avg_price = u.avg_price
-            if u.bid_price > 0 and opt.bid_price != u.bid_price:
+            if u.bid_price >= 0 and opt.bid_price != u.bid_price:
                 opt.bid_price = u.bid_price
                 value_changed += 1
-            if u.ask_price > 0 and opt.ask_price != u.ask_price:
+            if u.ask_price >= 0 and opt.ask_price != u.ask_price:
                 opt.ask_price = u.ask_price
                 value_changed += 1
-            if u.last_price > 0 and opt.last_price != u.last_price:
+            if u.last_price >= 0 and opt.last_price != u.last_price:
                 opt.last_price = u.last_price
                 value_changed += 1
 

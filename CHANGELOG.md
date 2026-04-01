@@ -34,6 +34,25 @@
 
 ---
 
+## v4.4 (2026-04-01)
+
+### 日盤 T 字表報價即時同步修正
+
+#### Bug 1：日盤 成交價（last_price）不更新
+- **根因**：`_fetch_one_changed` 對 day series（TX104）只抓 `TF-TotalVolume` / `TF-InOutRatio` / `TF-AvgPrice`，沒有抓 `TF-Price`
+- **修法**：`xqfap_feed.py` `_fetch_one_changed` 補抓 `TF-Price` for day symbol，並將 `last_price` 加入 `day_item`
+
+#### Bug 2：委買/委賣 歸零後仍顯示舊值（報價消失無法清除）
+- **根因**：`FeedItem.bid_price` / `ask_price` / `last_price` 預設值 `0.0`，server 端條件 `if u.bid_price > 0` 擋住了「bid 消失（DDE 回空 → `_to_float` → 0.0）」的更新
+- **修法**：`main.py` `FeedItem` 三個欄位 default 改 `-1.0`（與 `inout_ratio` 一致）；server 條件改 `>= 0`，允許 0.0 覆蓋舊值
+
+#### Bug 3：日盤 委買/委賣/成交價 不即時更新
+- **根因**：`_quote_poll_worker` 只 poll active full series（TX1N04），TX104 從未被輪詢；日盤的委買委賣在快照後就凍結
+- **修法**：`xqfap_feed.py` quote_poll 每個 cycle 結束後，將 bid/ask/last 映射到對應 day series 同步推送（零額外 DDE request，直接複用已取得的值）
+  - 時間窗口：**08:45~13:45 才 mirror**（日盤時間內三欄位完全一致）；13:45 後停止，兩邊各自獨立，避免 XQFAP 重整後夜盤值污染日盤最後成交
+
+---
+
 ## v4.3 (2026-04-01)
 
 ### T 字表 Excel 複製 + 合成期貨對齊修正
