@@ -1,5 +1,26 @@
 # Changelog
 
+## v4.8 (2026-04-01)
+
+### 快照檔命名規則統一
+
+#### 新命名格式
+- 日快照：`{YY}_{label}_{series}_{YYYY-MM-DD}.json`
+- 週累積：`{YY}_{label}_{series}_{YYYY-MM-DD}_weekly_sum.json`
+
+其中 `{YY}` = 結算年後兩位，`{label}` = 合約代號（如 `04W1`、`04F1`、`04`，由 `tf_name_label` 從 PREFIX_RULES 推導）
+
+#### 範例
+- `26_04W1_TX1N04_2026-04-01.json`（原 `TX1N04_2026-04-01_1345.json`）
+- `26_04W1_TX1N04_2026-04-01_weekly_sum.json`（原 `TX1N04_2026-04-01_weekly.json`）
+
+#### 實作
+- `main.py` 新增 `_snap_prefix()`、`_snap_filename()`、`_parse_snap_filename()` 三個 helper
+- 所有存/讀快照路徑（`_try_save_snapshot`、`_try_save_weekly_snapshot`、`api_snapshots`、`api_weekly_pnl`）改用新 helper
+- 現有 21 個快照檔一次性改名完成
+
+---
+
 ## v4.7 (2026-04-01)
 
 ### 日盤盤外資料時間固定 + 右側損益圖初始 zoom

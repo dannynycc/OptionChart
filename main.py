@@ -21,7 +21,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from core.calculator import OptionData, calc_combined_pnl, build_strike_table, calc_atm
-from core.taifex_calendar import PREFIX_RULES, settlement_date as calc_settlement_date
+from core.taifex_calendar import PREFIX_RULES, settlement_date as calc_settlement_date, tf_name_label
 
 logging.basicConfig(
     level=logging.INFO,
@@ -62,6 +62,65 @@ _snapshot_taken_today: dict[str, str] = {}  # series → date_str（已存快照
 
 def _is_day_series(series: str) -> bool:
     return 'N' not in series
+
+def _snap_prefix(series: str, settlement_date_str: str) -> str:
+    """
+    回傳快照檔名前綴，格式：{YY}_{label}
+    例：TX1N04 + 2026-04-01 → '26_04W1'
+        TXUN04 + 2026-04-07 → '26_04F1'
+        TXON04 + 2026-04-15 → '26_04'
+    """
+    if not settlement_date_str:
+        return ""
+    sd = datetime.date.fromisoformat(settlement_date_str)
+    yy = str(sd.year)[-2:]
+    # 取 full series 的 prefix（日盤先補回 N 找 prefix）
+    full = series if 'N' in series else series[:-2] + 'N' + series[-2:]
+    n_idx = full.index('N')
+    prefix = full[:n_idx]   # e.g. 'TX1', 'TXU', 'TXO'
+    label = tf_name_label(prefix, sd.month)   # e.g. '04W1', '04F1', '04'
+    return f"{yy}_{label}"
+
+def _snap_filename(series: str, date_str: str, snap_type: str) -> str:
+    """
+    回傳完整快照檔名。
+    snap_type: 'daily' → '{prefix}_{series}_{date}.json'
+               'weekly_sum' → '{prefix}_{series}_{date}_weekly_sum.json'
+    """
+    sd_str = _settlement_dates.get(series, "")
+    prefix = _snap_prefix(series, sd_str)
+    if snap_type == 'weekly_sum':
+        return f"{prefix}_{series}_{date_str}_weekly_sum.json"
+    return f"{prefix}_{series}_{date_str}.json"
+
+def _parse_snap_filename(fname: str) -> "dict | None":
+    """
+    解析快照檔名，回傳 {prefix, series, date, snap_type} 或 None。
+    支援新格式：{YY}_{label}_{series}_{date}[_weekly_sum].json
+    """
+    if not fname.endswith('.json'):
+        return None
+    stem = fname[:-5]
+    if stem.endswith('_weekly_sum'):
+        snap_type = 'weekly_sum'
+        stem = stem[:-len('_weekly_sum')]
+    else:
+        snap_type = 'daily'
+    # 格式：{YY}_{label}_{series}_{YYYY-MM-DD}
+    # 日期固定為 YYYY-MM-DD（10字元），前面是 _ 分隔符
+    if len(stem) < 11 or stem[-11] != '_':
+        return None
+    date_str = stem[-10:]
+    rest     = stem[:-11]   # 去掉 _{YYYY-MM-DD}
+    # rest = {YY}_{label}_{series}，series 中可能含 N
+    # series 部分：TXxN|TXx + 2位數字，前綴為 {YY}_{label}
+    # 從右側找最長的合法 series（TX 開頭）
+    idx = rest.rfind('_')
+    if idx < 0:
+        return None
+    series   = rest[idx+1:]
+    prefix   = rest[:idx]
+    return {"prefix": prefix, "series": series, "date": date_str, "snap_type": snap_type}
 
 def _series_last_updated(series: str) -> float:
     """回傳 series 的資料時間戳。
@@ -201,7 +260,7 @@ def _try_save_snapshot(series: str) -> bool:
     table = build_strike_table(calls, puts, current_index=atm, synthetic_map=synthetic_map)
 
     os.makedirs(_SNAPSHOT_DIR, exist_ok=True)
-    fname = f"{series}_{today}_1345.json"
+    fname = _snap_filename(series, today, 'daily')
     path  = os.path.join(_SNAPSHOT_DIR, fname)
     raw_calls = [
         {"strike": c.strike, "net_pos": c.net_position, "avg_price": c.avg_premium}
@@ -256,12 +315,10 @@ def _try_save_weekly_snapshot(
     # 只載前幾天（不含今天）的快照作為 baseline
     prev_snapshots = []
     for fname in sorted(os.listdir(_SNAPSHOT_DIR)):
-        if not fname.endswith('_1345.json') or not fname.startswith(series + '_'):
+        parsed = _parse_snap_filename(fname)
+        if not parsed or parsed['snap_type'] != 'daily' or parsed['series'] != series:
             continue
-        parts = fname.replace('.json', '').split('_')
-        if len(parts) != 3:
-            continue
-        _, date, _ = parts
+        date = parsed['date']
         if date < week_str or date >= today:   # 嚴格小於今天
             continue
         with open(os.path.join(_SNAPSHOT_DIR, fname), 'r', encoding='utf-8') as f:
@@ -273,7 +330,7 @@ def _try_save_weekly_snapshot(
     weekly_pnl = [round(baseline["pnl"][i] + today_pnl[i], 4) for i in range(len(today_strikes))]
 
     sources = [f"{s['series']}_{s['date']}" for s in prev_snapshots] + [f"{series}_{today}"]
-    weekly_path = os.path.join(_SNAPSHOT_DIR, f"{series}_{today}_weekly.json")
+    weekly_path = os.path.join(_SNAPSHOT_DIR, _snap_filename(series, today, 'weekly_sum'))
     with open(weekly_path, 'w', encoding='utf-8') as f:
         json.dump({
             "series":     series,
@@ -716,22 +773,23 @@ async def api_snapshots(series: str = "", settlement_date: str = ""):
     result = []
     try:
         for fname in sorted(os.listdir(_SNAPSHOT_DIR)):
-            if not fname.endswith('.json'):
+            parsed = _parse_snap_filename(fname)
+            if not parsed:
                 continue
-            if series and not fname.startswith(series + '_'):
+            s    = parsed['series']
+            date = parsed['date']
+            snap_type = parsed['snap_type']
+            if series and s != series:
                 continue
-            parts = fname.replace('.json', '').split('_')
-            if len(parts) != 3:
-                continue
-            s, date, t = parts
-            # 有 week_start：過濾掉 active 期間之前的快照（全日盤與日盤皆適用）
             if week_str and date < week_str:
                 continue
             session = "全日盤" if 'N' in s else "日盤"
-            if t == "weekly":
+            if snap_type == 'weekly_sum':
                 label = f"{date} 當週全日盤累積"
+                t = "weekly"
             else:
-                label = f"{date} {t[:2]}:{t[2:]} ({session})"
+                t = "1345"
+                label = f"{date} 13:45 ({session})"
             result.append({"filename": fname, "series": s, "date": date, "time": t, "label": label})
     except Exception as e:
         logger.warning(f"api_snapshots error: {e}")
@@ -767,7 +825,7 @@ async def api_weekly_pnl(series: str = "", settlement_date: str = ""):
     if series and settlement_date:
         _sd_now = now.date().isoformat()
         if settlement_date <= _sd_now and now.time() >= datetime.time(13, 45):
-            _weekly_file = os.path.join(_SNAPSHOT_DIR, f"{series}_{settlement_date}_weekly.json")
+            _weekly_file = os.path.join(_SNAPSHOT_DIR, _snap_filename(series, settlement_date, 'weekly_sum'))
             if os.path.exists(_weekly_file):
                 with open(_weekly_file, 'r', encoding='utf-8') as _f:
                     _data = json.load(_f)
@@ -791,22 +849,19 @@ async def api_weekly_pnl(series: str = "", settlement_date: str = ""):
     snapshots = []
     try:
         for fname in sorted(os.listdir(_SNAPSHOT_DIR)):
-            if not fname.endswith('.json'):
+            parsed = _parse_snap_filename(fname)
+            if not parsed or parsed['snap_type'] != 'daily':
                 continue
-            if series and not fname.startswith(series + '_'):
+            if series and parsed['series'] != series:
                 continue
-            parts = fname.replace('.json', '').split('_')
-            if len(parts) != 3:
-                continue
-            s, date, t = parts
+            date = parsed['date']
             if date < week_str:
-                continue  # 排除合約 active 期間之前
+                continue
             if date > today_str:
-                continue  # 排除未來日期（快照不應超過今天）
+                continue
             if date == today_str and not session_reset:
-                continue  # 今天 14:35 前：live pnl 代表今天，不重複納入
-            path = os.path.join(_SNAPSHOT_DIR, fname)
-            with open(path, 'r', encoding='utf-8') as f:
+                continue
+            with open(os.path.join(_SNAPSHOT_DIR, fname), 'r', encoding='utf-8') as f:
                 snapshots.append(json.load(f))
     except Exception as e:
         logger.warning(f"api_weekly_pnl error: {e}")
@@ -843,7 +898,7 @@ async def api_force_snapshot(series: str = ""):
     table = build_strike_table(calls, puts, current_index=atm, synthetic_map=synthetic_map)
     today = datetime.date.today().isoformat()
     os.makedirs(_SNAPSHOT_DIR, exist_ok=True)
-    fname = f"{series}_{today}_1345.json"
+    fname = _snap_filename(series, today, 'daily')
     path  = os.path.join(_SNAPSHOT_DIR, fname)
     raw_calls = [
         {"strike": c.strike, "net_pos": c.net_position, "avg_price": c.avg_premium}
