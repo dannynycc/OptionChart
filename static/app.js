@@ -219,13 +219,22 @@ function _recalcYAxis(xMin, xMax) {
 
 function _initSlider(minS, maxS, forceReset = false) {
   const el = document.getElementById('range-slider');
+  // forceReset 時（合約/盤別切換）：zoom in 到 ATM ±4%，取最近百位數
+  let initMin = minS, initMax = maxS;
+  if (forceReset && _atmStrike) {
+    initMin = Math.round(_atmStrike * 0.96 / 100) * 100;
+    initMax = Math.round(_atmStrike * 1.04 / 100) * 100;
+    // 確保不超出資料範圍
+    initMin = Math.max(initMin, minS);
+    initMax = Math.min(initMax, maxS);
+  }
   if (_nouiSlider) {
     if (!forceReset && minS === _sliderMin && maxS === _sliderMax) return;
     _nouiSlider.updateOptions({ range: { min: minS, max: maxS } }, true);
-    _nouiSlider.set([minS, maxS]);
+    _nouiSlider.set([initMin, initMax]);
   } else {
     _nouiSlider = noUiSlider.create(el, {
-      start:   [minS, maxS],
+      start:   [initMin, initMax],
       connect: true,
       step:    50,
       range:   { min: minS, max: maxS },
@@ -865,7 +874,15 @@ setInterval(() => {
   if (_activeSettlementDate) {
     const today = new Date().toISOString().slice(0, 10);
     const now   = new Date();
-    if (_activeSettlementDate <= today && (now.getHours() > 13 || (now.getHours() === 13 && now.getMinutes() >= 45))) {
+    const h = now.getHours(), mi = now.getMinutes();
+    if (_activeSettlementDate <= today && (h > 13 || (h === 13 && mi >= 45))) {
+      _feedToast.classList.remove('visible');
+      return;
+    }
+    // 日盤模式且盤外（非 08:45~13:45）：資料不會動，跳過斷線偵測
+    const isDay = document.getElementById('btn-day-session')?.classList.contains('active');
+    const inDaySession = (h > 8 || (h === 8 && mi >= 45)) && (h < 13 || (h === 13 && mi <= 45));
+    if (isDay && !inDaySession) {
       _feedToast.classList.remove('visible');
       return;
     }
@@ -937,6 +954,7 @@ function handleData(data, source) {
   _lastLivePnl = data.pnl;
 
   updateTable(data.table);
+  if (data.atm_strike) _atmStrike = data.atm_strike;  // 先更新 ATM，讓 updateChart forceReset 能用正確值
   if (_viewMode === 'weekly') {
     updateChart(_mergeWithLive(data.pnl), modeChanged);
   } else {

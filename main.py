@@ -60,13 +60,26 @@ _ws_connect_count: int = 0   # 累計 WS 連線次數（刷新頁面會 +1）
 _SNAPSHOT_DIR         = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'snapshots')
 _snapshot_taken_today: dict[str, str] = {}  # series → date_str（已存快照的日期，防重複）
 
+def _is_day_series(series: str) -> bool:
+    return 'N' not in series
+
 def _series_last_updated(series: str) -> float:
-    """回傳 series 的資料時間戳。已結算合約固定回傳結算日 13:45:00，避免顯示誤導時間。"""
-    sd = _settlement_dates.get(series, "")
-    if sd:
-        now = datetime.datetime.now()
-        if sd <= now.date().isoformat() and now.time() >= datetime.time(13, 45):
-            return datetime.datetime.fromisoformat(f"{sd} 13:45:00").timestamp()
+    """回傳 series 的資料時間戳。
+    - 已結算合約：固定回傳結算日 13:45:00
+    - 日盤盤外（非 08:45~13:45）：固定回傳今天（或昨天）13:45:00
+    """
+    sd  = _settlement_dates.get(series, "")
+    now = datetime.datetime.now()
+    t   = now.time()
+    if sd and sd <= now.date().isoformat() and t >= datetime.time(13, 45):
+        return datetime.datetime.fromisoformat(f"{sd} 13:45:00").timestamp()
+    if _is_day_series(series) and not (datetime.time(8, 45) <= t <= datetime.time(13, 45)):
+        # 盤後（>13:45）→ 今天 13:45:00；盤前（<08:45）→ 昨天 13:45:00
+        if t >= datetime.time(13, 45):
+            ref_date = now.date()
+        else:
+            ref_date = now.date() - datetime.timedelta(days=1)
+        return datetime.datetime.fromisoformat(f"{ref_date} 13:45:00").timestamp()
     return _last_updated.get(series, 0.0)
 
 # ── 快照邏輯 ──────────────────────────────────────────────────
@@ -490,12 +503,15 @@ async def api_feed(updates: list[FeedItem], series: str = ""):
                 value_changed += 1
 
     if found > 0:
-        # 已結算合約（settlement_date <= 今天 且已過 13:45）不再更新時間戳
         _sd  = _settlement_dates.get(series, "")
         _now = datetime.datetime.now()
-        _settled = bool(_sd and _sd <= _now.date().isoformat() and _now.time() >= datetime.time(13, 45))
-        if not _settled:
-            _last_updated[series] = time.time()   # 有收到合約資料即更新（含盤後無變動）
+        _t   = _now.time()
+        # 已結算合約：不更新時間戳
+        _settled = bool(_sd and _sd <= _now.date().isoformat() and _t >= datetime.time(13, 45))
+        # 日盤盤外（非 08:45~13:45）：資料不會有意義變動，不更新時間戳
+        _day_offhours = _is_day_series(series) and not (datetime.time(8, 45) <= _t <= datetime.time(13, 45))
+        if not _settled and not _day_offhours:
+            _last_updated[series] = time.time()
         _try_save_snapshot(series)            # 若已到 13:45 且今天尚未存過，觸發快照
     if value_changed:
         # 只有當前 active series 更新才廣播（背景 series 靜默儲存）
@@ -529,10 +545,14 @@ async def api_get_session():
 async def api_heartbeat(series: str = ""):
     """bg_poll 心跳：只更新 last_updated 時間戳，不推送資料"""
     if series and series in stores:
-        # 已結算合約（settlement_date <= 今天 且已過 13:45）不再更新時間戳
         sd  = _settlement_dates.get(series, "")
         now = datetime.datetime.now()
-        if sd and sd <= now.date().isoformat() and now.time() >= datetime.time(13, 45):
+        t   = now.time()
+        # 已結算合約：不更新
+        if sd and sd <= now.date().isoformat() and t >= datetime.time(13, 45):
+            return {"ok": True}
+        # 日盤盤外：不更新
+        if _is_day_series(series) and not (datetime.time(8, 45) <= t <= datetime.time(13, 45)):
             return {"ok": True}
         _last_updated[series] = time.time()
     return {"ok": True}
