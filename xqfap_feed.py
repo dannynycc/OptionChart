@@ -359,12 +359,19 @@ def _req_thread(item: str) -> str:
         )
         _user32.DdeFreeStringHandle(inst.value, hsz)
         if not hdata:
-            # 連線已斷，先 DdeDisconnect 再重連
+            # 連線已斷，先 DdeDisconnect + DdeUninitialize 再重連
             try:
                 _user32.DdeDisconnect(hconv)
             except Exception:
                 pass
+            old_inst = getattr(_thread_local, 'inst', None)
+            if old_inst:
+                try:
+                    _user32.DdeUninitialize(old_inst.value)
+                except Exception:
+                    pass
             _thread_local.hconv = None
+            _thread_local.inst  = None
             return ''
         sz  = _user32.DdeGetData(hdata, None, 0, 0)
         buf = ctypes.create_string_buffer(sz) if sz > 0 else ctypes.create_string_buffer(1)
@@ -373,14 +380,21 @@ def _req_thread(item: str) -> str:
         val = buf.raw.rstrip(b'\x00').decode('cp950', errors='replace').strip()
         return '' if val in ('-', '') else val.rstrip('%')
     except Exception:
-        # 例外路徑：同樣先 disconnect 再清除
+        # 例外路徑：同樣先 disconnect + uninitialize 再清除
         hconv = getattr(_thread_local, 'hconv', None)
         if hconv:
             try:
                 _user32.DdeDisconnect(hconv)
             except Exception:
                 pass
+        old_inst = getattr(_thread_local, 'inst', None)
+        if old_inst:
+            try:
+                _user32.DdeUninitialize(old_inst.value)
+            except Exception:
+                pass
         _thread_local.hconv = None
+        _thread_local.inst  = None
         return ''
 
 
@@ -1426,7 +1440,10 @@ def _ddeml_worker(worker_id: int, symbols: list, fields: list,
         errors[worker_id] = str(e)
     finally:
         if hconv:
-            pass   # DdeDisconnect 可選，process 結束時自動清理
+            try:
+                _user32.DdeDisconnect(hconv)
+            except Exception:
+                pass
         try:
             _user32.DdeUninitialize(inst.value)
         except Exception:

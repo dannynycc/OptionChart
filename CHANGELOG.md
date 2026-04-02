@@ -1,5 +1,14 @@
 # Changelog
 
+## v4.12 (2026-04-02)
+
+### 修正：DDEML thread-local instance 洩漏 + test mode cleanup 順序
+
+- **`_req_thread` 斷線路徑（Path1 / Path2）**：原本斷線時只清 `hconv`，`inst` 仍留在 `_thread_local`；下次 lazy init 重建連線時 `_thread_ddeml_connect()` 直接覆蓋 `_thread_local.inst`，舊的 DDEML instance 永遠沒有 `DdeUninitialize`，造成 Windows DDEML 系統資源累積洩漏。修正：兩條斷線路徑均補上 `DdeUninitialize(old_inst)` + `_thread_local.inst = None`
+- **`_ddeml_worker`（--test-ddeml 模式）**：`finally` 區塊 `hconv` 存在時原本直接 `pass`，改為正確呼叫 `DdeDisconnect(hconv)`，符合 DDEML cleanup 順序（先 Disconnect 再 Uninitialize）
+
+---
+
 ## v4.11 (2026-04-02)
 
 ### 修正：watchdog 重連後 TotalVolume 資料遺失（深度 ITM 合約成交量空白）
