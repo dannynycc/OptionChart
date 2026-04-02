@@ -1073,6 +1073,9 @@ def _reconnect_and_resubscribe():
         syms = list(_all_metas[target].keys())
         _advise_subscribe(syms)
         logger.info(f"[watchdog] 重新訂閱完成（{target}，{len(syms)} 個）")
+        # 重連後補一次 bulk_req，回補斷線期間遺失的 TotalVolume 變動
+        threading.Thread(target=_bulk_request_series, args=(target,), daemon=True).start()
+        logger.info(f"[watchdog] 啟動補拉 bulk_req（{target}）")
 
 
 def _advise_loop():

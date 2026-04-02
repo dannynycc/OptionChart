@@ -1,5 +1,15 @@
 # Changelog
 
+## v4.11 (2026-04-02)
+
+### 修正：watchdog 重連後 TotalVolume 資料遺失（深度 ITM 合約成交量空白）
+
+- **問題根源**：DDEML watchdog 每 60~130 秒因 DDE 斷線而重連。`_reconnect_and_resubscribe()` 重訂 advise 後沒有補跑 `_bulk_request_series`，而 ADVSTART 語義只訂閱「未來變動」，不回送當前值；斷線期間的所有 TotalVolume / InOutRatio 變動因此永久遺失
+- **症狀**：深度 ITM Call（如 04F1 的 32250~32400）的外盤成交量、內盤成交量、成交量欄位全部顯示空白，`inout_ratio` 始終停在初始預設值 50.0
+- **修正（`xqfap_feed.py`）**：`_reconnect_and_resubscribe()` 在 `_advise_subscribe()` 完成後，立即啟動 daemon thread 執行 `_bulk_request_series(target)`，回補斷線期間遺失的資料
+
+---
+
 ## v4.10 (2026-04-01)
 
 ### 修正：server 重啟後快照重複存檔問題
