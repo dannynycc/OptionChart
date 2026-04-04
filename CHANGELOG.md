@@ -1,5 +1,15 @@
 # Changelog
 
+## v4.12.2 (2026-04-04)
+
+### 改善：start.bat 自動安裝依賴套件
+
+- 啟動時自動執行 `pip install -r requirements.txt`
+- 新環境雙擊 `start.bat` 即可直接使用，無需手動裝套件
+- 已安裝者無感（靜默模式，瞬間跳過）
+
+---
+
 ## v4.12.1 (2026-04-04)
 
 ### 修正：補齊 requirements.txt 缺少的依賴套件
