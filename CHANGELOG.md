@@ -1,5 +1,15 @@
 # Changelog
 
+## v4.12.1 (2026-04-04)
+
+### 修正：補齊 requirements.txt 缺少的依賴套件
+
+- 新增 `pywin32>=306`（DDE 連接新富邦 e01 必要）
+- 新增 `requests>=2.28.0`（xqfap_feed.py 依賴）
+- 新環境執行 `pip install -r requirements.txt` 即可一次裝齊，不再需要手動補裝
+
+---
+
 ## v4.12 (2026-04-02)
 
 ### 修正：DDEML thread-local instance 洩漏 + test mode cleanup 順序
