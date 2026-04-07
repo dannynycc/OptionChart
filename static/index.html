@@ -30,10 +30,17 @@
     <button id="btn-day-session"  class="toggle-btn">日盤(一般)</button>
   </div>
   <div class="toolbar-item">
-    <span class="label">損益視圖</span>
-    <select id="view-mode-select">
-      <option value="live">即時 (當盤)</option>
-      <option value="weekly">即時 (當週全日盤累積)</option>
+    <span id="dot-intraday" class="view-dot active"></span>
+    <span class="label view-label" data-target="intraday">盤中快照</span>
+    <select id="view-intraday">
+      <option value="live">即時</option>
+    </select>
+  </div>
+  <div class="toolbar-item">
+    <span id="dot-weekly" class="view-dot"></span>
+    <span class="label view-label" data-target="weekly">當週累積</span>
+    <select id="view-weekly">
+      <option value="weekly-live">即時</option>
     </select>
   </div>
   <div class="toolbar-item">
@@ -103,6 +110,7 @@
     <div id="pnl-stats"></div>
     <div id="pnl-chart"></div>
     <div id="range-slider-wrap">
+      <button id="btn-zoom-toggle" class="toggle-btn" title="切換 X 軸範圍">全範圍</button>
       <div id="range-slider"></div>
     </div>
   </section>

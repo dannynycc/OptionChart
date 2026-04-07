@@ -68,21 +68,25 @@ def _is_day_series(series: str) -> bool:
     return 'N' not in series
 
 def _is_trading_hours() -> bool:
-    """判斷當前是否在交易時段（日盤 08:45~13:45 / 夜盤 15:00~00:00）"""
+    """判斷當前是否在交易時段（日盤 08:45~13:45 / 夜盤 15:00~05:00）"""
     t = datetime.datetime.now().time()
     if datetime.time(8, 45) <= t <= datetime.time(13, 45):
         return True   # 日盤
     if t >= datetime.time(15, 0):
-        return True   # 夜盤（15:00~23:59）
-    return False      # 00:00~08:44 或 13:46~14:59
+        return True   # 夜盤前半（15:00~23:59）
+    if t <= datetime.time(5, 0):
+        return True   # 夜盤後半（00:00~05:00）
+    return False      # 05:01~08:44 或 13:46~14:59
 
 def _is_intraday_snap_time() -> bool:
-    """判斷當前是否適合存盤中快照（日盤 09:00~13:30 / 夜盤 15:30~00:00）"""
+    """判斷當前是否適合存盤中快照（日盤 09:00~13:30 / 夜盤 15:30~05:00）"""
     t = datetime.datetime.now().time()
     if datetime.time(9, 0) <= t <= datetime.time(13, 30):
         return True   # 日盤（09:00~13:30，13:45 由收盤快照處理）
     if t >= datetime.time(15, 30):
-        return True   # 夜盤（15:30~23:59，跳過 15:00 reinit 期間）
+        return True   # 夜盤前半（15:30~23:59）
+    if t <= datetime.time(5, 0):
+        return True   # 夜盤後半（00:00~05:00）
     return False
 
 def _table_rows_to_cols(table: list[dict]) -> dict[str, list]:
@@ -991,13 +995,12 @@ async def api_snapshots(series: str = "", settlement_date: str = ""):
                 continue
             if week_str and date < week_str:
                 continue
-            session = "全日盤" if 'N' in s else "日盤"
             if snap_type == 'weekly_sum':
-                label = f"{date} 當週全日盤累積"
+                label = f"{date} 當週累積"
                 t = "weekly"
             else:
                 t = "1345"
-                label = f"{date} 13:45 ({session})"
+                label = f"{date} 13:45"
             result.append({"filename": fname, "series": s, "date": date, "time": t, "label": label})
         # 盤中快照（snapshots/intraday/）
         if os.path.exists(_INTRADAY_DIR):
@@ -1117,6 +1120,14 @@ async def api_weekly_pnl(series: str = "", settlement_date: str = ""):
     result = _virtual_twin_pnl(snapshots, live_strikes)
     result["week_start"] = week_str
     result["sources"] = [f"{s['series']}_{s['date']}" for s in snapshots]
+    # 合約成為 default 的起始時間：前一張合約結算日 15:00（夜盤開盤）
+    # 若前一張合約尚未結算（日期在未來），不顯示
+    _start = ""
+    if settlement_date:
+        _prev = _prev_contract_settlement(settlement_date)
+        if _prev <= today:
+            _start = f"{_prev.isoformat()} 15:00:00"
+    result["start_time"] = _start
     return result
 
 

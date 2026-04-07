@@ -167,13 +167,29 @@ const showDayOnly = false;  // 保留供 _day suffix 邏輯使用，固定 false
 const btnFull = document.getElementById('btn-full-session');
 const btnDay  = document.getElementById('btn-day-session');
 
+function _activateViewDot(which) {
+  // which: 'intraday' | 'weekly' — 切換小圓點 + 互斥：對面顯示空白
+  const dotI = document.getElementById('dot-intraday');
+  const dotW = document.getElementById('dot-weekly');
+  const selW = document.getElementById('view-weekly');
+  const selI = document.getElementById('view-intraday');
+  if (which === 'intraday') {
+    if (dotI) dotI.classList.add('active');
+    if (dotW) dotW.classList.remove('active');
+    if (selW) selW.selectedIndex = -1;
+  } else {
+    if (dotW) dotW.classList.add('active');
+    if (dotI) dotI.classList.remove('active');
+    if (selI) selI.selectedIndex = -1;
+  }
+}
+
 function _setSessionMode(mode) {
   // 快照或當週累積模式下點全日盤/日盤 → 先切回即時(當盤)
   if (_viewMode === 'snapshot' || _viewMode === 'weekly') {
     _viewMode = 'live';
     _weeklyPnlBaseline = null;
-    const sel = document.getElementById('view-mode-select');
-    if (sel) sel.value = 'live';
+    _activateViewDot('intraday');
   }
   btnFull.classList.toggle('active', mode === 'full');
   btnDay.classList.toggle('active',  mode === 'day');
@@ -198,6 +214,7 @@ const prevValues = {};  // key: `${strike}_C` / `${strike}_P` / etc.
 // ── noUiSlider 初始化 / 更新 ──────────────────────────
 let _nouiSlider  = null;
 let _sliderMin   = 0, _sliderMax = 0;
+let _zoomMode    = 'full';  // 'full' (全範圍) | 'atm' (ATM ±4%)
 
 function _recalcYAxis(xMin, xMax) {
   const vis = [];
@@ -219,12 +236,10 @@ function _recalcYAxis(xMin, xMax) {
 
 function _initSlider(minS, maxS, forceReset = false) {
   const el = document.getElementById('range-slider');
-  // forceReset 時（合約/盤別切換）：zoom in 到 ATM ±4%，取最近百位數
   let initMin = minS, initMax = maxS;
-  if (forceReset && _atmStrike) {
+  if (forceReset && _zoomMode === 'atm' && _atmStrike) {
     initMin = Math.round(_atmStrike * 0.96 / 100) * 100;
     initMax = Math.round(_atmStrike * 1.04 / 100) * 100;
-    // 確保不超出資料範圍
     initMin = Math.max(initMin, minS);
     initMax = Math.min(initMax, maxS);
   }
@@ -256,6 +271,30 @@ function _initSlider(minS, maxS, forceReset = false) {
   _sliderMin = minS;
   _sliderMax = maxS;
 }
+
+// ── Zoom 切換按鈕 ─────────────────────────────────────
+document.getElementById('btn-zoom-toggle').addEventListener('click', function() {
+  if (!_nouiSlider || _chartStrikes.length === 0) return;
+  if (_zoomMode === 'full') {
+    // 切到 ATM ±4%
+    _zoomMode = 'atm';
+    this.textContent = 'ATM±4%';
+    this.classList.add('active');
+    if (_atmStrike) {
+      const minS = Math.min(..._chartStrikes), maxS = Math.max(..._chartStrikes);
+      let zMin = Math.round(_atmStrike * 0.96 / 100) * 100;
+      let zMax = Math.round(_atmStrike * 1.04 / 100) * 100;
+      _nouiSlider.set([Math.max(zMin, minS), Math.min(zMax, maxS)]);
+    }
+  } else {
+    // 切到全範圍
+    _zoomMode = 'full';
+    this.textContent = '全範圍';
+    this.classList.remove('active');
+    const minS = Math.min(..._chartStrikes), maxS = Math.max(..._chartStrikes);
+    _nouiSlider.set([minS, maxS]);
+  }
+});
 
 // ── ATM 垂直虛線 ───────────────────────────────────────
 function updateATMLine(atmStrike) {
@@ -347,24 +386,45 @@ function _updatePnlStats() {
 
   const fmt = v => (v >= 0 ? '+' : '-') + Math.abs(Math.round(v)).toLocaleString();
 
-  // 第一行：損益兩平
+  // 第一行：損益兩平（左）+ 開始時間（右）
   const row1 = document.createElement('div');
-  row1.appendChild(_statSpan('stat-label', '損益兩平'));
-  row1.appendChild(document.createTextNode('\u3000'));
-  row1.appendChild(_statSpan('stat-be', bePts.length ? bePts.join(' / ') : '無'));
+  row1.style.display = 'flex';
+  row1.style.justifyContent = 'space-between';
+  const row1Left = document.createElement('span');
+  row1Left.appendChild(_statSpan('stat-label', '損益兩平'));
+  row1Left.appendChild(document.createTextNode('\u3000'));
+  row1Left.appendChild(_statSpan('stat-be', bePts.length ? bePts.join(' / ') : '無'));
+  row1.appendChild(row1Left);
+  if (_viewMode === 'weekly' && _weeklyPnlBaseline && _weeklyPnlBaseline.start_time) {
+    const row1Right = document.createElement('span');
+    row1Right.appendChild(_statSpan('stat-label', '開始 '));
+    row1Right.appendChild(_statSpan('stat-be', _weeklyPnlBaseline.start_time));
+    row1.appendChild(row1Right);
+  }
   el.appendChild(row1);
 
-  // 第二行：最大獲利 / 最大損失
+  // 第二行：最大獲利 / 最大損失（左）+ 結束時間（右）
   const row2 = document.createElement('div');
-  row2.appendChild(_statSpan('stat-label', '最大獲利'));
-  row2.appendChild(document.createTextNode('\u3000'));
-  row2.appendChild(_statSpan('stat-profit', fmt(maxPnl) + ' 萬 '));
-  row2.appendChild(_statSpan('stat-strike', '@' + maxStrike));
-  row2.appendChild(document.createTextNode('\u3000\u3000'));
-  row2.appendChild(_statSpan('stat-label', '最大損失'));
-  row2.appendChild(document.createTextNode('\u3000'));
-  row2.appendChild(_statSpan('stat-loss', fmt(minPnl) + ' 萬 '));
-  row2.appendChild(_statSpan('stat-strike', '@' + minStrike));
+  row2.style.display = 'flex';
+  row2.style.justifyContent = 'space-between';
+  const row2Left = document.createElement('span');
+  row2Left.appendChild(_statSpan('stat-label', '最大獲利'));
+  row2Left.appendChild(document.createTextNode('\u3000'));
+  row2Left.appendChild(_statSpan('stat-profit', fmt(maxPnl) + ' 萬 '));
+  row2Left.appendChild(_statSpan('stat-strike', '@' + maxStrike));
+  row2Left.appendChild(document.createTextNode('\u3000\u3000'));
+  row2Left.appendChild(_statSpan('stat-label', '最大損失'));
+  row2Left.appendChild(document.createTextNode('\u3000'));
+  row2Left.appendChild(_statSpan('stat-loss', fmt(minPnl) + ' 萬 '));
+  row2Left.appendChild(_statSpan('stat-strike', '@' + minStrike));
+  row2.appendChild(row2Left);
+  if (_viewMode === 'weekly' && _weeklyPnlBaseline) {
+    const row2Right = document.createElement('span');
+    const endTime = document.getElementById('last-updated').textContent || '--';
+    row2Right.appendChild(_statSpan('stat-label', '結束 '));
+    row2Right.appendChild(_statSpan('stat-be', endTime));
+    row2.appendChild(row2Right);
+  }
   el.appendChild(row2);
 
   // 第三行：預估結算價（15檔合成期貨平均）
@@ -373,6 +433,7 @@ function _updatePnlStats() {
   row3.appendChild(document.createTextNode('\u3000'));
   row3.appendChild(_statSpan('stat-atm', _impliedForward != null ? String(_impliedForward) : '--'));
   el.appendChild(row3);
+
 }
 
 // ── DOM helper ────────────────────────────────────────
@@ -561,6 +622,7 @@ function updateTable(rows) {
 
 // ── 合約下拉選單 ───────────────────────────────────────
 let _contractsData        = [];
+let _activeFull           = '';
 let _viewingNonLive       = false;  // 用戶正在查看尚未 ready 的系列
 let _viewingNonLiveSeries = null;   // 目標 series 名稱（e.g. "TXON04"）
 let _ready = false;  // fetchContracts 完成前封鎖 handleData，防止 WS 在初始化期間渲染舊資料
@@ -602,24 +664,40 @@ async function _loadWeeklyBaseline(series, settlementDate) {
 }
 
 async function updateViewModeDropdown(series, settlementDate = '') {
-  const sel = document.getElementById('view-mode-select');
-  if (!sel) return;
-  // 清空舊快照選項（保留 live / weekly）
-  while (sel.options.length > 2) sel.remove(2);
+  const selIntra  = document.getElementById('view-intraday');
+  const selWeekly = document.getElementById('view-weekly');
+  if (!selIntra || !selWeekly) return;
+  // 記住目前選取值，刷新後盡量還原
+  const prevIntra  = selIntra.value;
+  const prevWeekly = selWeekly.value;
+  // 非 default 合約：當週累積無意義，disable 右邊
+  const isDefault = series === _activeFull;
+  selWeekly.disabled = !isDefault;
+  if (!isDefault) {
+    selWeekly.selectedIndex = -1;
+    document.getElementById('dot-weekly').classList.remove('active');
+  }
+  // 清空舊快照選項（左邊保留 "即時"，右邊保留 "即時"）
+  while (selIntra.options.length > 1) selIntra.remove(1);
+  while (selWeekly.options.length > 1) selWeekly.remove(1);
   try {
-    const daySeries = series.replace('N', '');
+    // 只 fetch 全日盤（帶 N）的快照，日盤快照不顯示在下拉選單
     const sdParam = settlementDate ? `&settlement_date=${encodeURIComponent(settlementDate)}` : '';
-    // 全日盤 + 日盤 各自 fetch，合併後按日期排序
-    const [r1, r2] = await Promise.all([
-      fetch(`/api/snapshots?series=${encodeURIComponent(series)}${sdParam}`),
-      fetch(`/api/snapshots?series=${encodeURIComponent(daySeries)}${sdParam}`),
-    ]);
-    const snaps1 = r1.ok ? (await r1.json()).snapshots || [] : [];
-    const snaps2 = r2.ok ? (await r2.json()).snapshots || [] : [];
-    const all = [...snaps1, ...snaps2].sort((a, b) => a.date.localeCompare(b.date) || a.series.localeCompare(b.series));
+    const r1 = await fetch(`/api/snapshots?series=${encodeURIComponent(series)}${sdParam}`);
+    const all = r1.ok ? (await r1.json()).snapshots || [] : [];
     for (const snap of all) {
-      sel.appendChild(new Option(snap.label, `snapshot:${snap.filename}`));
+      const val = `snapshot:${snap.filename}`;
+      if (snap.time === 'weekly') {
+        // 當週全日盤累積 → 右邊
+        selWeekly.appendChild(new Option(snap.label, val));
+      } else {
+        // 13:45 收盤 + intraday → 左邊
+        selIntra.appendChild(new Option(snap.label, val));
+      }
     }
+    // 還原之前的選取
+    if (prevIntra && [...selIntra.options].some(o => o.value === prevIntra)) selIntra.value = prevIntra;
+    if (prevWeekly && [...selWeekly.options].some(o => o.value === prevWeekly)) selWeekly.value = prevWeekly;
   } catch (e) {
     console.warn('updateViewModeDropdown failed', e);
   }
@@ -677,6 +755,7 @@ async function fetchContracts() {
     if (list.length === 0) return false;
 
     _contractsData = list;
+    _activeFull = data.active_full || '';
     const sel = document.getElementById('contract-select');
     while (sel.options.length) sel.remove(0);
 
@@ -770,6 +849,8 @@ async function _initContracts() {
   if (!ok) setTimeout(_initContracts, 2000);  // xqfap 尚未推送，2 秒後重試
 }
 _initContracts();
+// 頁面載入預設：左邊盤中快照亮燈選「即時」，右邊當週累積顯示空白
+_activateViewDot('intraday');
 
 // ── 定期刷新合約 live 狀態（背景載入完成時移除 · 標記）──
 setInterval(async () => {
@@ -1072,8 +1153,9 @@ function _resetViewMode() {
   _viewMode           = 'live';
   _weeklyPnlBaseline  = null;
   _weeklyPnlCacheTime = 0;
-  const sel = document.getElementById('view-mode-select');
-  if (sel) sel.value = 'live';
+  const selI = document.getElementById('view-intraday');
+  if (selI) selI.value = 'live';
+  _activateViewDot('intraday');
   btnFull.classList.toggle('active', _currentSessionMode === 'full');
   btnDay.classList.toggle('active',  _currentSessionMode === 'day');
 }
@@ -1083,52 +1165,85 @@ function _exitSnapshot() {
   _resetViewMode();
 }
 
-document.getElementById('view-mode-select').addEventListener('change', async function () {
-  const val = this.value;
+// ── 共用快照載入邏輯 ──
+async function _loadSnapshot(filename) {
+  _viewMode = 'snapshot';
+  btnFull.classList.remove('active');
+  btnDay.classList.remove('active');
+  try {
+    const resp = await fetch(`/api/snapshots/${encodeURIComponent(filename)}`);
+    if (!resp.ok) return;
+    const snap = await resp.json();
+    document.getElementById('last-updated').textContent = snap.time === 'weekly'
+      ? `${snap.date} 13:45:00`
+      : `${snap.date} ${snap.time.slice(0,2)}:${snap.time.slice(2)}:00`;
+    if (snap.table) { _tableScrolled = false; updateTable(snap.table); }
+    if (snap.atm_strike) updateATMLine(snap.atm_strike);
+    if (snap.implied_forward != null) { _impliedForward = snap.implied_forward; _updatePnlStats(); }
+    updateChart({ strikes: snap.strikes, pnl: snap.pnl }, true);
+  } catch (e) {
+    console.warn('snapshot fetch failed', e);
+  }
+}
 
+// ── 點擊小圓點切換 ──
+function _clickSwitchIntraday() {
+  const sel = document.getElementById('view-intraday');
+  sel.value = 'live';
+  sel.dispatchEvent(new Event('change'));
+}
+function _clickSwitchWeekly() {
+  const sel = document.getElementById('view-weekly');
+  sel.value = 'weekly-live';
+  sel.dispatchEvent(new Event('change'));
+}
+document.getElementById('dot-intraday').addEventListener('click', _clickSwitchIntraday);
+document.getElementById('dot-weekly').addEventListener('click', _clickSwitchWeekly);
+document.querySelectorAll('.view-label').forEach(el => {
+  el.style.cursor = 'pointer';
+  el.addEventListener('click', () => {
+    if (el.dataset.target === 'intraday') _clickSwitchIntraday();
+    else _clickSwitchWeekly();
+  });
+});
+
+// ── 左邊：盤中快照（即時 / 13:45 / intraday）──
+document.getElementById('view-intraday').addEventListener('change', async function () {
+  if (this.selectedIndex < 0) return;
+  _activateViewDot('intraday');
+
+  const val = this.value;
   if (val === 'live') {
     const wasNonLive = (_viewMode === 'snapshot' || _viewMode === 'weekly');
     _viewMode = 'live';
     _weeklyPnlBaseline = null;
-    // 從快照或當週累積切回即時：永遠預設全日盤；否則維持目前 session
     if (wasNonLive) _setSessionMode('full');
     else {
       btnFull.classList.toggle('active', _currentSessionMode === 'full');
       btnDay.classList.toggle('active',  _currentSessionMode === 'day');
     }
-    // live 模式：下次 handleData 自然更新圖表
+  } else if (val.startsWith('snapshot:')) {
+    await _loadSnapshot(val.slice('snapshot:'.length));
+  }
+});
 
-  } else if (val === 'weekly') {
+// ── 右邊：當週全日盤累積 ──
+document.getElementById('view-weekly').addEventListener('change', async function () {
+  if (this.selectedIndex < 0) return;
+  _activateViewDot('weekly');
+
+  const val = this.value;
+  if (val === 'weekly-live') {
     _viewMode = 'weekly';
     btnFull.classList.remove('active');
     btnDay.classList.remove('active');
-    // 取得當前 active series
     const sel = document.getElementById('contract-select');
     const c   = _contractsData[parseInt(sel.value)];
     if (!c) return;
     await _loadWeeklyBaseline(c.series, c.settlement_date);
-    // 立刻用最新 live pnl 重繪
     if (_lastLivePnl) updateChart(_mergeWithLive(_lastLivePnl), true);
-
   } else if (val.startsWith('snapshot:')) {
-    const filename = val.slice('snapshot:'.length);
-    _viewMode = 'snapshot';
-    btnFull.classList.remove('active');
-    btnDay.classList.remove('active');
-    try {
-      const resp = await fetch(`/api/snapshots/${encodeURIComponent(filename)}`);
-      if (!resp.ok) return;
-      const snap = await resp.json();
-      document.getElementById('last-updated').textContent = snap.time === 'weekly'
-        ? `${snap.date} 13:45:00`
-        : `${snap.date} ${snap.time.slice(0,2)}:${snap.time.slice(2)}:00`;
-      if (snap.table) { _tableScrolled = false; updateTable(snap.table); }
-      if (snap.atm_strike) updateATMLine(snap.atm_strike);
-      if (snap.implied_forward != null) { _impliedForward = snap.implied_forward; _updatePnlStats(); }
-      updateChart({ strikes: snap.strikes, pnl: snap.pnl }, true);
-    } catch (e) {
-      console.warn('snapshot fetch failed', e);
-    }
+    await _loadSnapshot(val.slice('snapshot:'.length));
   }
 });
 
