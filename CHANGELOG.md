@@ -1,5 +1,23 @@
 # Changelog
 
+## v4.18 (2026-04-07)
+
+### Log 檔清理：停止無限增長 + 移除遺留檔案
+
+#### 問題
+- `uvicorn.log`（HTTP access log）、`uvicorn_err.log`、`xqfap_err.log` 由 `start.py` 用 `open('a')` 導出，沒有 rotation，會無限增長（已累積 3MB + 0.3MB + 0.8MB）
+- `uvicorn_err.log` / `xqfap_err.log` 的內容與 `server.log` / `xqfap.log`（有 RotatingFileHandler）完全重複
+- `uvicorn.log` 記錄每個 HTTP request 一行，xqfap_feed 每秒打幾十次，增長最快
+
+#### 修正（`scripts/start.py`）
+- 4 個 `open('a')` → `open('w')`：每次重啟清空，不再累積。歷史紀錄由 RotatingFileHandler 的 `server.log` / `xqfap.log` 保管
+- uvicorn 加 `--no-access-log`：停掉重複的 HTTP access log（`uvicorn.log` 從 3MB 降為 0 bytes）
+
+#### 清理
+- 移除 `monitor/` 下 6 個舊架構遺留檔案：`feed.log`、`feed_err.log`、`monitor_loop.log`、`monitor_night.log`、`monitor_night.py`、`ws_count.txt`（無任何 code 引用）
+
+---
+
 ## v4.17 (2026-04-07)
 
 ### 快照檔案壓縮：table 改用 columnar 格式
