@@ -302,8 +302,9 @@ def _try_save_snapshot(series: str) -> bool:
     _snapshot_taken_today[series] = today
     logger.info(f"[snapshot] 已存 {fname}，raw_calls={len(raw_calls)}, raw_puts={len(raw_puts)}")
 
-    # 全日盤系列額外存「當週全日盤累積」快照
-    if 'N' in series:
+    # 全日盤系列在結算日額外存「當週全日盤累積」快照
+    # 非結算日資料持續變動，看即時(當週全日盤累積)即可，不需存檔
+    if 'N' in series and _settlement_dates.get(series, "") == today:
         _try_save_weekly_snapshot(series, today, result["strikes"], result["pnl"])
 
     return True
