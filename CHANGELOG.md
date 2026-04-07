@@ -1,5 +1,28 @@
 # Changelog
 
+## v5.0 (2026-04-07)
+
+### 盤中定時快照 + 分鐘價格線（策略數據基建）
+
+#### 盤中快照（`snapshots/intraday/`）
+- 日盤 09:00~13:30 / 夜盤 15:30~00:00，每 30 分鐘對齊整點（:00 和 :30）觸發
+- 所有追蹤中的 full series（帶 N）全存，不限 active
+- 夜盤只存 full series（日盤系列凍結無意義）
+- 內容：完整 columnar table + pnl + raw_calls/raw_puts + atm + implied_forward + `futures_price`
+- `has_data` 保護：沒有實際交易資料不存空檔
+- 檔名格式：`{series}_{YYYY-MM-DD}_{HHMM}.json`
+
+#### 分鐘價格線（`monitor/price_log_{YYYY-MM-DD}.csv`）
+- 每分鐘對齊整分鐘記錄 FITX 現價 + implied_forward
+- 交易時段自動判斷（日盤 08:45~13:45 / 夜盤 15:00~00:00），盤外不記
+- 格式：`timestamp,futures_price,implied_forward`，~70KB/天
+
+#### 策略計畫文件
+- `docs/STRATEGY_PLAN.md`：Covered call 策略四階段完整計畫
+- `docs/PROGRESS.md`：Phase 1~4 checklist 進度表
+
+---
+
 ## v4.19 (2026-04-07)
 
 ### 雜項修正 + 測試腳本入庫

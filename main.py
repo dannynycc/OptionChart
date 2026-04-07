@@ -57,11 +57,32 @@ clients: set[WebSocket] = set()
 _ws_connect_count: int = 0   # 累計 WS 連線次數（刷新頁面會 +1）
 
 # ── 快照管理 ──────────────────────────────────────────────────
-_SNAPSHOT_DIR         = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'snapshots')
+_ROOT_DIR             = os.path.dirname(os.path.abspath(__file__))
+_SNAPSHOT_DIR         = os.path.join(_ROOT_DIR, 'snapshots')
+_INTRADAY_DIR         = os.path.join(_ROOT_DIR, 'snapshots', 'intraday')
+_PRICE_LOG_DIR        = os.path.join(_ROOT_DIR, 'monitor')
 _snapshot_taken_today: dict[str, str] = {}  # series → date_str（已存快照的日期，防重複）
 
 def _is_day_series(series: str) -> bool:
     return 'N' not in series
+
+def _is_trading_hours() -> bool:
+    """判斷當前是否在交易時段（日盤 08:45~13:45 / 夜盤 15:00~00:00）"""
+    t = datetime.datetime.now().time()
+    if datetime.time(8, 45) <= t <= datetime.time(13, 45):
+        return True   # 日盤
+    if t >= datetime.time(15, 0):
+        return True   # 夜盤（15:00~23:59）
+    return False      # 00:00~08:44 或 13:46~14:59
+
+def _is_intraday_snap_time() -> bool:
+    """判斷當前是否適合存盤中快照（日盤 09:00~13:30 / 夜盤 15:30~00:00）"""
+    t = datetime.datetime.now().time()
+    if datetime.time(9, 0) <= t <= datetime.time(13, 30):
+        return True   # 日盤（09:00~13:30，13:45 由收盤快照處理）
+    if t >= datetime.time(15, 30):
+        return True   # 夜盤（15:30~23:59，跳過 15:00 reinit 期間）
+    return False
 
 def _table_rows_to_cols(table: list[dict]) -> dict[str, list]:
     """快照存檔用：list-of-dicts → dict-of-lists（columnar），消除重複 key 名稱"""
@@ -375,6 +396,85 @@ def _try_save_weekly_snapshot(
     logger.info(f"[weekly-snapshot] 已存 {os.path.basename(weekly_path)}，來源：{sources}")
 
 
+# ── 分鐘價格線 ──────────────────────────────────────────────────
+
+def _write_price_log(futures_price: float, implied_forward):
+    """每分鐘記錄 FITX 現價 + implied_forward 到當天的 CSV"""
+    if not _is_trading_hours() or futures_price <= 0:
+        return
+    today = datetime.date.today().isoformat()
+    path = os.path.join(_PRICE_LOG_DIR, f"price_log_{today}.csv")
+    now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    is_new = not os.path.exists(path)
+    try:
+        with open(path, 'a', encoding='utf-8') as f:
+            if is_new:
+                f.write("timestamp,futures_price,implied_forward\n")
+            fwd = implied_forward if implied_forward is not None else ""
+            f.write(f"{now_str},{futures_price},{fwd}\n")
+    except Exception as e:
+        logger.warning(f"[price_log] 寫入失敗：{e}")
+
+
+# ── 盤中定時快照 ────────────────────────────────────────────────
+
+def _try_save_intraday_snapshot():
+    """
+    對所有追蹤中的 full series 存盤中快照到 snapshots/intraday/。
+    只在盤中交易時段觸發（日盤 09:00~13:30 / 夜盤 15:30~00:00）。
+    """
+    if not _is_intraday_snap_time():
+        return
+    os.makedirs(_INTRADAY_DIR, exist_ok=True)
+    now = datetime.datetime.now()
+    time_tag = now.strftime("%H%M")
+    today = now.strftime("%Y-%m-%d")
+
+    for series, store in list(stores.items()):
+        # 只存 full series（帶 N），夜盤時日盤系列凍結沒意義
+        if _is_day_series(series):
+            continue
+        with _lock:
+            calls = [v for v in store.values() if v.side == 'C']
+            puts  = [v for v in store.values() if v.side == 'P']
+        # has_data 保護：沒有實際交易資料不存
+        if not any(c.avg_premium > 0 or c.net_position != 0 for c in calls + puts):
+            continue
+        result = calc_combined_pnl(calls, puts)
+        if not result["strikes"]:
+            continue
+        snap_center = _futures_price
+        atm, synthetic_map, implied_forward = calc_atm(calls, puts,
+            center_price=snap_center, settlement_date=_settlement_dates.get(series, ""))
+        table = build_strike_table(calls, puts, current_index=atm, synthetic_map=synthetic_map)
+        raw_calls = [
+            {"strike": c.strike, "net_pos": c.net_position, "avg_price": c.avg_premium}
+            for c in calls if c.net_position != 0 or c.avg_premium > 0
+        ]
+        raw_puts = [
+            {"strike": p.strike, "net_pos": p.net_position, "avg_price": p.avg_premium}
+            for p in puts if p.net_position != 0 or p.avg_premium > 0
+        ]
+        fname = f"{series}_{today}_{time_tag}.json"
+        path = os.path.join(_INTRADAY_DIR, fname)
+        snapshot = {
+            "series":          series,
+            "date":            today,
+            "time":            time_tag,
+            "futures_price":   _futures_price,
+            "strikes":         result["strikes"],
+            "pnl":             result["pnl"],
+            "table":           _table_rows_to_cols(table),
+            "atm_strike":      atm,
+            "implied_forward": implied_forward,
+            "raw_calls":       raw_calls,
+            "raw_puts":        raw_puts,
+        }
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(snapshot, f, ensure_ascii=False, separators=(',', ':'))
+        logger.info(f"[intraday] 已存 {fname}，{len(result['strikes'])} strikes")
+
+
 # ── 計算 payload ──────────────────────────────────────────────
 
 def compute_payload() -> dict:
@@ -432,9 +532,13 @@ async def broadcast(payload: dict):
 async def _periodic_broadcast():
     """每 1 秒廣播最新資料給所有已連線的瀏覽器"""
     tick = 0
+    _last_payload = None           # 暫存最新 payload，供分鐘線讀 implied_forward
+    _last_price_log_min = -1       # 上次寫分鐘線的分鐘數，避免同分鐘重複
+    _last_intraday_snap_tag = ""   # 上次盤中快照的 HHMM tag，避免同時段重複
     while True:
         await asyncio.sleep(1)
         tick += 1
+        now = datetime.datetime.now()
         if tick % 30 == 0:
             logger.info(f"heartbeat: clients={len(clients)}, stores={list(stores.keys())}")
         if tick % 10 == 0:
@@ -443,9 +547,24 @@ async def _periodic_broadcast():
                 _try_save_snapshot(series)
         if clients and stores:
             try:
-                await broadcast(compute_payload())
+                _last_payload = compute_payload()
+                await broadcast(_last_payload)
             except Exception as e:
                 logger.warning(f"periodic_broadcast error: {e}")
+        # ── 分鐘價格線（每分鐘整點觸發）────────────────
+        cur_min = now.hour * 60 + now.minute
+        if cur_min != _last_price_log_min and _last_payload:
+            _last_price_log_min = cur_min
+            _write_price_log(_futures_price, _last_payload.get("implied_forward"))
+        # ── 盤中快照（對齊 :00 和 :30 整點）────────────
+        if now.minute in (0, 30) and now.second < 10:
+            snap_tag = now.strftime("%H%M")
+            if snap_tag != _last_intraday_snap_tag:
+                _last_intraday_snap_tag = snap_tag
+                try:
+                    _try_save_intraday_snapshot()
+                except Exception as e:
+                    logger.warning(f"intraday snapshot error: {e}")
 
 # ── App 生命週期 ──────────────────────────────────────────────
 
