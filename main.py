@@ -228,27 +228,34 @@ def _virtual_twin_pnl(snapshots: list[dict], live_strikes: list[int]) -> dict:
 
 def _try_save_snapshot(series: str) -> bool:
     """
-    若 last_updated[series] >= 今天 13:45 且今天尚未存過，則存快照。
+    若現在時間 >= 今天 13:45:20 且今天尚未存過，則存快照。
     全日盤（含 N）和日盤各自獨立觸發。回傳 True 表示本次有存檔。
     只對 active series（_active_full / _active_day）存檔，其餘略過。
     """
     if series not in (_active_full, _active_day):
         return False
-    ts = _last_updated.get(series, 0.0)
-    if not ts:
-        return False
-    dt   = datetime.datetime.fromtimestamp(ts)
-    now  = datetime.datetime.now()
+    now   = datetime.datetime.now()
     today = now.strftime("%Y-%m-%d")
 
-    # 條件：last_updated 是今天 且 >= 13:45:20（多留 20 秒確保收盤資料已完整推入）
-    if dt.strftime("%Y-%m-%d") != today:
+    # 條件 1：現在時間 >= 13:45:20（多留 20 秒確保收盤資料已完整推入）
+    if (now.hour, now.minute, now.second) < (13, 45, 20):
         return False
-    if (dt.hour, dt.minute, dt.second) < (13, 45, 20):
-        return False
-    # 今天已存過
+    # 條件 2：今天已存過
     if _snapshot_taken_today.get(series) == today:
         return False
+    # 條件 3：store 有今天的資料
+    #   正常情況：_last_updated 是今天（feeds 在 13:45 前持續更新）
+    #   結算日：_settled 在 13:45 凍住 _last_updated，甚至重啟後為 0，
+    #          但 store 裡的資料仍是今天的，用 settlement_date == today 作為 fallback
+    ts = _last_updated.get(series, 0.0)
+    data_is_today = False
+    if ts:
+        dt = datetime.datetime.fromtimestamp(ts)
+        data_is_today = dt.strftime("%Y-%m-%d") == today
+    if not data_is_today:
+        sd = _settlement_dates.get(series, "")
+        if sd != today:
+            return False
 
     store = stores.get(series, {})
     with _lock:
@@ -256,6 +263,11 @@ def _try_save_snapshot(series: str) -> bool:
         puts  = [v for v in store.values() if v.side == 'P']
     result = calc_combined_pnl(calls, puts)
     if not result["strikes"]:
+        return False
+    # 確認 store 有實際交易資料（avg_price > 0 或 net_position != 0），
+    # 避免 init 後 bulk_req 尚未完成就存空殼快照
+    has_data = any(c.avg_premium > 0 or c.net_position != 0 for c in calls + puts)
+    if not has_data:
         return False
     snap_center = _futures_price if 'N' in series else 0
     atm, synthetic_map, implied_forward = calc_atm(calls, puts,

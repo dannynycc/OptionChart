@@ -1,5 +1,25 @@
 # Changelog
 
+## v4.14 (2026-04-07)
+
+### 修正：結算日快照無法自動觸發
+
+#### 問題
+- 結算日當天，13:45 一到 `_settled = True`，`api_feed` 停止更新 `_last_updated`
+- `_last_updated` 凍在 ~13:44:xx，永遠達不到快照門檻 13:45:20
+- 結算日的快照從來不會自動存檔，每次都需要手動 force-snapshot
+
+#### 修正（`main.py` `_try_save_snapshot`）
+- 時間判斷從 `_last_updated` 時間改為 `now`（現在時間 >= 13:45:20 即觸發）
+- 資料日期判斷：正常靠 `_last_updated` 是今天；結算日 fallback 到 `settlement_date == today`（涵蓋重啟後 `_last_updated` 為 0 的情況）
+- 新增 `has_data` 保護：store 裡至少要有一筆 `avg_price > 0` 或 `net_position != 0`，避免 init 後 bulk_req 還沒跑完就存空殼快照
+
+#### 測試
+- 結算日（2026-04-07 TXUN04）實測：刪除快照 → 重啟 server → 15 秒內自動觸發
+- 快照內容完整：126 strikes、87 raw_calls、92 raw_puts、ATM=33100
+
+---
+
 ## v4.13 (2026-04-07)
 
 ### HTTP 連線重用 + file handle 洩漏修正
