@@ -1,5 +1,29 @@
 # Changelog
 
+## v4.17 (2026-04-07)
+
+### 快照檔案壓縮：table 改用 columnar 格式
+
+#### 問題
+- 快照檔 ~100KB，其中 `table`（T字報價表）佔 88%（~94KB）
+- 126 行 × 34 個欄位，key 名稱如 `"ask_match_call_day"` 重複 126 次
+
+#### 解法：行列轉置（columnar）
+- 存檔時 `table` 從 `[{key:val,...},...]`（list-of-dicts）轉為 `{key:[val,...],...]}`（dict-of-lists）
+- 每個 key 只出現一次，資料完全無損，可雙向轉換
+- `/api/snapshots/{filename}` 讀取時自動偵測格式，columnar 轉回 rows 再回傳前端（前端零改動）
+- 同時改用 compact JSON（`separators=(',',':')` 去除多餘空格）
+
+#### 效果
+- 全部 12 個快照：1,161KB → 357KB（**-69%**）
+- 單檔：~100KB → ~30KB
+- 舊格式快照向後相容（API 自動偵測 list/dict）
+
+#### 遷移
+- 既有快照一次性轉換完成
+
+---
+
 ## v4.16 (2026-04-07)
 
 ### 修正：force-snapshot 少存 weekly_sum + 空殼擋住自動快照

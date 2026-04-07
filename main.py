@@ -63,6 +63,21 @@ _snapshot_taken_today: dict[str, str] = {}  # series → date_str（已存快照
 def _is_day_series(series: str) -> bool:
     return 'N' not in series
 
+def _table_rows_to_cols(table: list[dict]) -> dict[str, list]:
+    """快照存檔用：list-of-dicts → dict-of-lists（columnar），消除重複 key 名稱"""
+    if not table:
+        return {}
+    keys = list(table[0].keys())
+    return {k: [row[k] for row in table] for k in keys}
+
+def _table_cols_to_rows(table_cols: dict[str, list]) -> list[dict]:
+    """快照讀取用：dict-of-lists → list-of-dicts，還原前端所需的 row 格式"""
+    if not table_cols:
+        return []
+    keys = list(table_cols.keys())
+    n = len(table_cols[keys[0]])
+    return [{k: table_cols[k][i] for k in keys} for i in range(n)]
+
 def _snap_prefix(series: str, settlement_date_str: str) -> str:
     """
     回傳快照檔名前綴，格式：{YY}_{label}
@@ -291,14 +306,14 @@ def _try_save_snapshot(series: str) -> bool:
         "time":    "1345",
         "strikes":         result["strikes"],
         "pnl":             result["pnl"],
-        "table":           table,
+        "table":           _table_rows_to_cols(table),
         "atm_strike":      atm,
         "implied_forward": implied_forward,
         "raw_calls":       raw_calls,
         "raw_puts":        raw_puts,
     }
     with open(path, 'w', encoding='utf-8') as f:
-        json.dump(snapshot, f, ensure_ascii=False)
+        json.dump(snapshot, f, ensure_ascii=False, separators=(',', ':'))
     _snapshot_taken_today[series] = today
     logger.info(f"[snapshot] 已存 {fname}，raw_calls={len(raw_calls)}, raw_puts={len(raw_puts)}")
 
@@ -820,7 +835,12 @@ async def api_snapshot_file(filename: str):
     if not os.path.exists(path):
         return {"error": "not found"}
     with open(path, 'r', encoding='utf-8') as f:
-        return json.load(f)
+        data = json.load(f)
+    # columnar table（dict）→ 前端所需的 row 格式（list）
+    t = data.get("table")
+    if isinstance(t, dict):
+        data["table"] = _table_cols_to_rows(t)
+    return data
 
 
 @app.get("/api/weekly-pnl")
@@ -928,14 +948,14 @@ async def api_force_snapshot(series: str = ""):
         "time":            "1345",
         "strikes":         result["strikes"],
         "pnl":             result["pnl"],
-        "table":           table,
+        "table":           _table_rows_to_cols(table),
         "atm_strike":      atm,
         "implied_forward": implied_forward,
         "raw_calls":       raw_calls,
         "raw_puts":        raw_puts,
     }
     with open(path, 'w', encoding='utf-8') as f:
-        json.dump(snapshot, f, ensure_ascii=False)
+        json.dump(snapshot, f, ensure_ascii=False, separators=(',', ':'))
     # 有實際交易資料才標記「今天已存」，避免空殼快照擋住後續自動快照
     has_data = any(c.net_position != 0 or c.avg_premium > 0 for c in calls + puts)
     if has_data:
