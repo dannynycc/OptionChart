@@ -944,14 +944,14 @@ async def restart_feed():
         logger.warning(f"restart-feed: 終止舊 process 失敗（{e}），繼續啟動新的")
     # 啟動新 process，stdout/stderr 導向 logs/xqfap.log
     log_path = os.path.join(base, 'monitor', 'xqfap.log')
-    log_file = open(log_path, 'a', encoding='utf-8')
-    subprocess.Popen(
-        [sys.executable, 'xqfap_feed.py'],
-        cwd=base,
-        stdout=log_file,
-        stderr=log_file,
-        creationflags=subprocess.CREATE_NO_WINDOW,
-    )
+    with open(log_path, 'a', encoding='utf-8') as log_file:
+        subprocess.Popen(
+            [sys.executable, 'xqfap_feed.py'],
+            cwd=base,
+            stdout=log_file,
+            stderr=log_file,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
     logger.info("restart-feed: 已啟動新 xqfap_feed.py")
     return {"status": "restarting"}
 

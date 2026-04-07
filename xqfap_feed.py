@@ -41,6 +41,7 @@ except ImportError:
     sys.exit(1)
 
 SERVER_URL = "http://localhost:8000"
+_http = requests.Session()   # 連線重用（keep-alive），所有 thread 共用
 
 logging.basicConfig(
     level=logging.INFO,
@@ -466,7 +467,7 @@ def _discover_contracts(center: int, full_series: str) -> "tuple[list, dict]":
 def _post_init(contracts: list, series: str, settlement_date: str = ""):
     sd = settlement_date or ""
     try:
-        r = requests.post(
+        r = _http.post(
             f"{SERVER_URL}/api/init",
             json={'settlement_date': sd, 'contracts': contracts, 'series': series},
             timeout=10,
@@ -487,7 +488,7 @@ def _push_futures_price(price: float = 0.0):
         else:
             val = _to_float(_req_thread("FITXN*1.TF-Price"))
         if val > 0:
-            requests.post(f"{SERVER_URL}/api/set-futures-price", json={"price": val}, timeout=2)
+            _http.post(f"{SERVER_URL}/api/set-futures-price", json={"price": val}, timeout=2)
             logger.info(f"FITX 現價推送：{val}")
         else:
             logger.warning("FITXN*1.TF-Price 回傳 0 或空值，略過推送")
@@ -497,7 +498,7 @@ def _push_futures_price(price: float = 0.0):
 
 def _post_feed(batch: list, series: str):
     try:
-        r = requests.post(f"{SERVER_URL}/api/feed?series={series}", json=batch, timeout=5)
+        r = _http.post(f"{SERVER_URL}/api/feed?series={series}", json=batch, timeout=5)
         if r.status_code != 200:
             logger.warning(f"POST /api/feed [{series}] HTTP {r.status_code}")
     except Exception as e:
@@ -877,7 +878,7 @@ def _bulk_request_series(full_series: str):
             logger.info(f"[bulk_req] Phase1 {full_series} {len(full_batch)} 筆"
                         f"（{n_threads} threads，{elapsed1:.1f}s）")
         try:
-            requests.post(f"{SERVER_URL}/api/series-ready?series={full_series}", timeout=3)
+            _http.post(f"{SERVER_URL}/api/series-ready?series={full_series}", timeout=3)
             logger.info(f"[bulk_req] series-ready: {full_series}")
         except Exception as _e:
             logger.warning(f"[bulk_req] series-ready 失敗 {full_series}: {_e}")
@@ -931,7 +932,7 @@ def _bulk_request_series(full_series: str):
                 logger.info(f"[bulk_req] Phase2 {day_series} {len(day_batch)} 筆"
                             f"（{elapsed2:.1f}s）")
             try:
-                requests.post(f"{SERVER_URL}/api/series-ready?series={day_series}", timeout=3)
+                _http.post(f"{SERVER_URL}/api/series-ready?series={day_series}", timeout=3)
                 logger.info(f"[bulk_req] series-ready: {day_series}")
             except Exception as _e:
                 logger.warning(f"[bulk_req] series-ready 失敗 {day_series}: {_e}")
@@ -1016,7 +1017,7 @@ def _series_watcher():
     last_seen = ''
     while True:
         try:
-            resp = requests.get(f"{SERVER_URL}/api/active-series", timeout=3)
+            resp = _http.get(f"{SERVER_URL}/api/active-series", timeout=3)
             if resp.ok:
                 new_full = resp.json().get('full', '')
                 if new_full:
@@ -1041,11 +1042,11 @@ def _bg_poll_one_series(full_series: str, offset: float):
             day_series = full_series.replace('N', '')
             logger.info(f"[bg_poll] 心跳 {full_series} / {day_series}")
             try:
-                requests.post(f"{SERVER_URL}/api/heartbeat?series={full_series}", timeout=2)
+                _http.post(f"{SERVER_URL}/api/heartbeat?series={full_series}", timeout=2)
             except Exception:
                 pass
             try:
-                requests.post(f"{SERVER_URL}/api/heartbeat?series={day_series}", timeout=2)
+                _http.post(f"{SERVER_URL}/api/heartbeat?series={day_series}", timeout=2)
             except Exception:
                 pass
         else:
@@ -1237,8 +1238,8 @@ def _reinit():
     logger.info(f"重新初始化完成：{list(_all_metas.keys())}")
     # 通知 main.py 清除已不在追蹤清單的廢棄系列（避免 stores 無限累積）
     try:
-        requests.post(f"{SERVER_URL}/api/purge-series",
-                      json={'keep': list(new_metas.keys())}, timeout=5)
+        _http.post(f"{SERVER_URL}/api/purge-series",
+                   json={'keep': list(new_metas.keys())}, timeout=5)
     except Exception as e:
         logger.warning(f"purge-series 失敗：{e}")
     # 切換 active series 為新 default：after_cutoff 跳過今天結算的，取第一個未結算
@@ -1253,9 +1254,9 @@ def _reinit():
             new_default_full = new_full_list[0]
         new_default_day  = new_default_full.replace('N', '')
         try:
-            requests.post(f"{SERVER_URL}/api/set-series",
-                          json={'series_full': new_default_full, 'series_day': new_default_day},
-                          timeout=5)
+            _http.post(f"{SERVER_URL}/api/set-series",
+                       json={'series_full': new_default_full, 'series_day': new_default_day},
+                       timeout=5)
             logger.info(f"[reinit] 已切換 active → {new_default_full} / {new_default_day}")
         except Exception as e:
             logger.warning(f"[reinit] set-series 失敗：{e}")
@@ -1304,8 +1305,8 @@ def _post_contracts(found: list):
         })
     contracts.sort(key=lambda c: c['settlement_date'] or '9999-99-99')
     try:
-        requests.post(f"{SERVER_URL}/api/contracts",
-                      json={'contracts': contracts}, timeout=5)
+        _http.post(f"{SERVER_URL}/api/contracts",
+                   json={'contracts': contracts}, timeout=5)
         logger.info(f"已推送合約下拉清單（{len(contracts)} 個系列）")
     except Exception as e:
         logger.warning(f"推送合約清單失敗：{e}")
@@ -1619,7 +1620,7 @@ def main():
     # 等 uvicorn 就緒再開始 POST /api/init（避免 race condition）
     for _wait in range(30):
         try:
-            requests.get(f"{SERVER_URL}/api/status", timeout=2)
+            _http.get(f"{SERVER_URL}/api/status", timeout=2)
             break
         except Exception:
             logger.info(f"等待 uvicorn 就緒... ({_wait+1}/30)")

@@ -1,5 +1,30 @@
 # Changelog
 
+## v4.13 (2026-04-07)
+
+### HTTP 連線重用 + file handle 洩漏修正
+
+#### `xqfap_feed.py`：`requests.Session()` 連線重用
+- 新增全域 `_http = requests.Session()`，所有 `requests.post()` / `requests.get()` 改為 `_http.post()` / `_http.get()`（共 12 處）
+- 原本每次 HTTP 呼叫都建立新的 TCP 連線；改用 Session 後 keep-alive 重用連線，省掉 TCP 三次握手
+- `requests.Session` 底層 urllib3 的 `HTTPConnectionPool` 是 thread-safe，多執行緒共用無問題；server 重啟後 stale connection 也能自動恢復
+
+#### 效能實測（bulk_req 含 DDE 讀取 + HTTP 推送）
+
+| 系列 | 舊版全日盤 | 新版全日盤 | 舊版日盤 | 新版日盤 |
+|------|-----------|-----------|---------|---------|
+| TXUN04 (252筆) | 10.5s | **4.1s** | 24.4s | **6.2s** |
+| TX2N04 (240筆) | 10.4s | **2.0s** | 24.7s | **3.7s** |
+| TXVN04 (236筆) | 10.4s | **2.3s** | 23.9s | **4.8s** |
+| TXON04 (356筆) | 10.4s | **10.1s** | 38.9s | **13.0s** |
+
+全日盤平均加速 ~3x，日盤平均加速 ~4x。
+
+#### `main.py`：`restart_feed` file handle 洩漏修正
+- `open(log_path, 'a')` 改用 `with` 語句，`Popen` 啟動後自動關閉 file handle（原本每次 `/api/restart-feed` 洩漏一個 handle）
+
+---
+
 ## v4.12.2 (2026-04-04)
 
 ### 改善：start.bat 自動安裝依賴套件
