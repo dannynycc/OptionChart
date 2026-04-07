@@ -1,5 +1,15 @@
 # Changelog
 
+## v4.19 (2026-04-07)
+
+### 雜項修正 + 測試腳本入庫
+
+- **weekly-snapshot log 檔名修正**：log 訊息從硬編碼的 `{series}_{today}_weekly.json` 改為實際檔名（`os.path.basename(weekly_path)`）
+- **weekly_sum compact JSON**：`_try_save_weekly_snapshot` 的 `json.dump` 補上 `separators=(',', ':')`，與日快照一致
+- **測試腳本入庫**：`test/` 資料夾加入版控（bench_http、test_requests_session、test_snapshot_compress、test_snapshot_trigger、migrate_snapshots、dde_benchmark）
+
+---
+
 ## v4.18 (2026-04-07)
 
 ### Log 檔清理：停止無限增長 + 移除遺留檔案

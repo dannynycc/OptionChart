@@ -371,8 +371,8 @@ def _try_save_weekly_snapshot(
             "pnl":        weekly_pnl,
             "week_start": week_str,
             "sources":    sources,
-        }, f, ensure_ascii=False)
-    logger.info(f"[weekly-snapshot] 已存 {series}_{today}_weekly.json，來源：{sources}")
+        }, f, ensure_ascii=False, separators=(',', ':'))
+    logger.info(f"[weekly-snapshot] 已存 {os.path.basename(weekly_path)}，來源：{sources}")
 
 
 # ── 計算 payload ──────────────────────────────────────────────
