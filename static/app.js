@@ -812,6 +812,16 @@ setInterval(async () => {
   } catch(e) {}
 }, 5000);
 
+// ── 定期刷新快照下拉選單（盤中快照每 30 分鐘新增）──
+setInterval(() => {
+  if (!_contractsData.length) return;
+  const sel = document.getElementById('contract-select');
+  if (!sel) return;
+  const idx = parseInt(sel.value);
+  const c = _contractsData[idx];
+  if (c) updateViewModeDropdown(c.series, c.settlement_date);
+}, 60000);  // 每 1 分鐘
+
 // ── 更新頂部工具列與狀態角落 ──────────────────────────
 function updateStatus(status, settlement) {
   // 下拉選單已有資料時，結算日由選單驅動，不被 WS 覆寫
@@ -985,6 +995,13 @@ setInterval(() => {
 
 // ── WebSocket 連線 ─────────────────────────────────────
 let _ws = null;
+let _serverBootId = null;  // server 啟動 ID，偵測 server 重啟用
+
+// reload 後印 log（sessionStorage 跨 reload 存活）
+if (sessionStorage.getItem('server_restarted')) {
+  console.log(`%c✔ Server 重啟偵測，頁面已自動以 Hard Reload 重新載入（${sessionStorage.getItem('server_restarted')}）`, 'color: #3fb950');
+  sessionStorage.removeItem('server_restarted');
+}
 
 function connect() {
   const ws = new WebSocket(`ws://${location.host}/ws`);
@@ -998,6 +1015,20 @@ function connect() {
     let data;
     try { data = JSON.parse(event.data); }
     catch { return; }
+    // server 重啟偵測：boot_id 改變 → hard reload
+    if (data.boot_id) {
+      if (_serverBootId && _serverBootId !== data.boot_id) {
+        sessionStorage.setItem('server_restarted', new Date().toLocaleTimeString());
+        // 先強制更新靜態檔案快取，再 reload（等同 Ctrl+Shift+R）
+        Promise.all([
+          fetch('/static/app.js', {cache: 'reload'}),
+          fetch('/static/style.css', {cache: 'reload'}),
+          fetch('/static/index.html', {cache: 'reload'}),
+        ]).then(() => location.reload()).catch(() => location.reload());
+        return;
+      }
+      _serverBootId = data.boot_id;
+    }
     handleData(data, 'WS');
   };
 

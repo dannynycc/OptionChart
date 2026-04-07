@@ -6,4 +6,3 @@ taskkill /F /IM python.exe 2>nul && echo   OK || echo   (無執行中的 python.
 
 echo.
 echo 全部停止完畢。
-pause

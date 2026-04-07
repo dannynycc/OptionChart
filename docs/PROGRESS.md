@@ -3,26 +3,26 @@
 ## Phase 1：資料基建
 
 ### 盤中定時快照
-- [ ] `_try_save_intraday_snapshot()` 函數（存所有 full series 到 `snapshots/intraday/`）
-- [ ] columnar + compact JSON + has_data 保護
-- [ ] 快照包含 `futures_price` 欄位
-- [ ] `_periodic_broadcast` 每 1800 秒觸發（日盤 09:00~13:30 / 夜盤 15:30~00:00）
-- [ ] 夜盤只存 full series
-- [ ] 在 test/ 寫測試，驗證快照觸發時機和內容正確性
-- [ ] 真實數據模擬測試
+- [x] `_try_save_intraday_snapshot()` 函數（存所有 full series 到 `snapshots/intraday/`）
+- [x] columnar + compact JSON + has_data 保護
+- [x] 快照包含 `futures_price` 欄位
+- [x] 對齊 :00 和 :30 整點觸發（日盤 09:00~13:30 / 夜盤 15:30~00:00）
+- [x] 夜盤只存 full series
+- [x] 在 test/ 寫測試，驗證快照觸發時機和內容正確性
+- [x] 真實數據模擬測試（17:30 觸發，5 個 full series 全部正確）
 
 ### 分鐘價格線
-- [ ] `_periodic_broadcast` 每 60 秒追加 CSV（timestamp, futures_price, implied_forward）
-- [ ] 存放路徑：`monitor/price_log_{YYYY-MM-DD}.csv`
-- [ ] 判斷交易時段（日盤 08:45~13:45 / 夜盤 15:00~00:00），盤外不記
-- [ ] 在 test/ 寫測試
-- [ ] 真實數據模擬測試
+- [x] 每分鐘對齊整分鐘追加 CSV（timestamp, futures_price, implied_forward）
+- [x] 存放路徑：`monitor/price_log_{YYYY-MM-DD}.csv`
+- [x] 判斷交易時段（日盤 08:45~13:45 / 夜盤 15:00~00:00），盤外不記
+- [x] 在 test/ 寫測試
+- [x] 真實數據模擬測試
 
 ### 整合測試
-- [ ] 重啟 server，確認盤中快照 + 分鐘線都正常運作
-- [ ] 確認收盤 13:45 快照邏輯不受影響
-- [ ] 確認前端功能不受影響
-- [ ] commit + push + changelog
+- [x] 重啟 server，確認盤中快照 + 分鐘線都正常運作
+- [x] 確認收盤 13:45 快照邏輯不受影響
+- [x] 確認前端功能不受影響
+- [x] commit + push + changelog（v5.0）
 
 ---
 

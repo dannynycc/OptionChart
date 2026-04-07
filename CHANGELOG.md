@@ -1,5 +1,25 @@
 # Changelog
 
+## v5.1 (2026-04-07)
+
+### Intraday 快照修正 + 前端自動刷新
+
+#### Bug 修正
+- **已結算合約不再存 intraday 快照**：結算日夜盤 (>=15:00) 自動跳過已結算系列（如 TXUN04 04-07 結算後夜盤不再存）
+- **快照下拉選單過濾修正**：intraday 快照不再套用 week_str 日期過濾，修復月選等跨週合約被誤濾的問題
+- **收盤快照 week_str 起點調整**：從 `prev_settle + 1 天` 改為 `prev_settle`，包含結算日當晚的夜盤資料
+- 清理已結算 TXUN04 的無效 intraday 檔案
+
+#### 前端改善
+- **Server 重啟自動 hard reload**：前端偵測 `boot_id` 變化，自動 `fetch({cache:'reload'})` + `location.reload()`，不再累積瀏覽器分頁
+- **下拉選單自動刷新**：每 1 分鐘自動重抓快照列表，新的 intraday 快照不需手動刷新即可出現
+
+#### 啟動流程
+- `stop.bat` 移除 `pause`，不再卡住 bash
+- `scripts/start.py` log 檔改 `open('w')` 覆寫、移除自動開瀏覽器、加 `--no-access-log`
+
+---
+
 ## v5.0 (2026-04-07)
 
 ### 盤中定時快照 + 分鐘價格線（策略數據基建）

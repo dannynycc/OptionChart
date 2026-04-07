@@ -15,7 +15,6 @@ import subprocess
 import sys
 import time
 import urllib.request
-import webbrowser
 
 ROOT    = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MONITOR = os.path.join(ROOT, 'monitor')
@@ -133,5 +132,7 @@ while True:
 
     time.sleep(2)
 
-print("Data ready. Opening browser...")
-webbrowser.open(SERVER_URL)
+print("Data ready.")
+# 不自動開瀏覽器——前端 WebSocket 偵測到 server 重啟會自動 hard reload
+# 首次使用請手動開啟 http://localhost:8000
+print(f"請開啟 {SERVER_URL}")
