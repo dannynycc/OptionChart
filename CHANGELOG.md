@@ -1,5 +1,19 @@
 # Changelog
 
+## v4.16 (2026-04-07)
+
+### 修正：force-snapshot 少存 weekly_sum + 空殼擋住自動快照
+
+#### 問題
+1. `force-snapshot` 不產生當週全日盤累積（weekly_sum），結算日手動重建快照時只有日快照
+2. `force-snapshot` 無論資料是否完整都標記「今天已存」，資料不完整時會擋住後續自動快照
+
+#### 修正（`main.py` `/api/force-snapshot`）
+- 結算日（`settlement_date == today`）時補呼叫 `_try_save_weekly_snapshot`
+- 只在 store 有實際交易資料（`has_data`）時才設 `_snapshot_taken_today`，空殼不標記
+
+---
+
 ## v4.15 (2026-04-07)
 
 ### 當週全日盤累積快照只在結算日存檔

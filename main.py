@@ -936,8 +936,16 @@ async def api_force_snapshot(series: str = ""):
     }
     with open(path, 'w', encoding='utf-8') as f:
         json.dump(snapshot, f, ensure_ascii=False)
-    _snapshot_taken_today[series] = today
+    # 有實際交易資料才標記「今天已存」，避免空殼快照擋住後續自動快照
+    has_data = any(c.net_position != 0 or c.avg_premium > 0 for c in calls + puts)
+    if has_data:
+        _snapshot_taken_today[series] = today
     logger.info(f"[force-snapshot] 強制重建 {fname}，{len(result['strikes'])} 個履約價，raw_calls={len(raw_calls)}, raw_puts={len(raw_puts)}")
+
+    # 結算日額外存當週全日盤累積
+    if 'N' in series and _settlement_dates.get(series, "") == today:
+        _try_save_weekly_snapshot(series, today, result["strikes"], result["pnl"])
+
     return {"ok": True, "filename": fname, "strikes_count": len(result["strikes"])}
 
 
