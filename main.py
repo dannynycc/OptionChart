@@ -89,6 +89,25 @@ def _is_intraday_snap_time() -> bool:
         return True   # 夜盤後半（00:00~05:00）
     return False
 
+def _reset_stores_for_new_session():
+    """14:35 配合 XQFAP 重整：清空所有 OptionData 的成交欄位，保留合約結構。"""
+    with _lock:
+        for series, store in stores.items():
+            for opt in store.values():
+                opt.trade_volume = 0
+                opt.inout_ratio  = 50.0
+                opt.bid_match    = 0
+                opt.ask_match    = 0
+                opt.trade_volume_day = -1
+                opt.bid_match_day    = -1
+                opt.ask_match_day    = -1
+                opt.avg_price    = 0.0
+                opt.bid_price    = 0.0
+                opt.ask_price    = 0.0
+                opt.last_price   = 0.0
+    logger.info(f"[daily-reset] 14:35 stores 已重整，{len(stores)} 個 series 的成交欄位已清空")
+
+
 def _table_rows_to_cols(table: list[dict]) -> dict[str, list]:
     """快照存檔用：list-of-dicts → dict-of-lists（columnar），消除重複 key 名稱"""
     if not table:
@@ -343,9 +362,8 @@ def _try_save_snapshot(series: str) -> bool:
     _snapshot_taken_today[series] = today
     logger.info(f"[snapshot] 已存 {fname}，raw_calls={len(raw_calls)}, raw_puts={len(raw_puts)}")
 
-    # 全日盤系列在結算日額外存「當週全日盤累積」快照
-    # 非結算日資料持續變動，看即時(當週全日盤累積)即可，不需存檔
-    if 'N' in series and _settlement_dates.get(series, "") == today:
+    # 全日盤系列：每天 13:45 都存當週累積快照（baseline + 今天）
+    if 'N' in series:
         _try_save_weekly_snapshot(series, today, result["strikes"], result["pnl"])
 
     return True
@@ -364,7 +382,7 @@ def _try_save_weekly_snapshot(
     settlement_date = _settlement_dates.get(series, "")
     try:
         prev_settle = _prev_contract_settlement(settlement_date)
-        week_start  = prev_settle + datetime.timedelta(days=1)
+        week_start  = prev_settle   # 結算日當天即屬新週（結算後資料歸新合約）
     except Exception:
         week_start = datetime.date.fromisoformat(today) - datetime.timedelta(days=datetime.date.fromisoformat(today).weekday())
     week_str = week_start.isoformat()
@@ -422,6 +440,41 @@ def _write_price_log(futures_price: float, implied_forward):
 
 
 # ── 盤中定時快照 ────────────────────────────────────────────────
+
+def _intraday_catchup():
+    """重啟後檢查盤中快照是否有遺漏（間隔 > 30 分鐘），若有則立即補存。
+    檔名與 JSON time 欄位皆使用實際補存時間，不偽造遺漏時段的時間戳。"""
+    if not _is_intraday_snap_time():
+        return
+    now = datetime.datetime.now()
+    today = now.strftime("%Y-%m-%d")
+    # 掃磁碟找今天最新的 intraday 快照時間
+    latest_time = None
+    if os.path.isdir(_INTRADAY_DIR):
+        for fname in os.listdir(_INTRADAY_DIR):
+            if today not in fname or not fname.endswith('.json'):
+                continue
+            parts = fname.replace('.json', '').split('_')
+            time_tag = parts[-1]
+            if time_tag.isdigit() and len(time_tag) == 4:
+                if latest_time is None or time_tag > latest_time:
+                    latest_time = time_tag
+    # 計算間隔
+    if latest_time is None:
+        gap_min = 999
+    else:
+        latest_total = int(latest_time[:2]) * 60 + int(latest_time[2:])
+        now_total = now.hour * 60 + now.minute
+        gap_min = now_total - latest_total
+        if gap_min < 0:
+            gap_min += 24 * 60   # 跨午夜（夜盤）
+    if gap_min > 30:
+        logger.info(f"[intraday-catchup] 偵測到快照間隔 {gap_min} 分鐘"
+                     f"（上次：{latest_time or '無'}），立即補存")
+        _try_save_intraday_snapshot()
+    else:
+        logger.info(f"[intraday-catchup] 快照無遺漏（上次：{latest_time}，間隔 {gap_min} 分鐘）")
+
 
 def _try_save_intraday_snapshot():
     """
@@ -591,10 +644,19 @@ async def _periodic_broadcast():
     _last_payload = None           # 暫存最新 payload，供分鐘線讀 implied_forward
     _last_price_log_min = -1       # 上次寫分鐘線的分鐘數，避免同分鐘重複
     _last_intraday_snap_tag = ""   # 上次盤中快照的 HHMM tag，避免同時段重複
+    _catchup_done = False          # 重啟後的盤中快照補存是否已執行
+    _daily_reset_done = False      # 今日 14:35 stores 重整是否已執行
     while True:
         await asyncio.sleep(1)
         tick += 1
         now = datetime.datetime.now()
+        # ── 重啟補存：等 60 秒讓資料到齊後，一次性檢查 ──
+        if not _catchup_done and tick >= 60 and stores:
+            _catchup_done = True
+            try:
+                _intraday_catchup()
+            except Exception as e:
+                logger.warning(f"intraday catchup error: {e}")
         if tick % 30 == 0:
             logger.info(f"heartbeat: clients={len(clients)}, stores={list(stores.keys())}")
         if tick % 10 == 0:
@@ -624,6 +686,10 @@ async def _periodic_broadcast():
         # ── 每日 13:50 自動 git push 數據 ─────────────
         if now.hour == 13 and now.minute == 50 and now.second < 10:
             _auto_git_push_data(now.strftime("%Y-%m-%d"))
+        # ── 每日 14:35 清空 stores（配合 XQFAP 重整）─────
+        if now.hour == 14 and now.minute == 35 and now.second < 10 and not _daily_reset_done:
+            _daily_reset_done = True
+            _reset_stores_for_new_session()
 
 # ── App 生命週期 ──────────────────────────────────────────────
 
@@ -1026,6 +1092,8 @@ async def api_snapshots(series: str = "", settlement_date: str = ""):
                                "date": date, "time": hhmm, "label": label})
     except Exception as e:
         logger.warning(f"api_snapshots error: {e}")
+    # 統一按 date + time 排序，讓 13:45 收盤快照落在當天 intraday 最後
+    result.sort(key=lambda x: (x["date"], x["time"]))
     return {"snapshots": result}
 
 
@@ -1081,7 +1149,7 @@ async def api_weekly_pnl(series: str = "", settlement_date: str = ""):
     if settlement_date:
         try:
             prev_settle = _prev_contract_settlement(settlement_date)
-            week_start  = prev_settle + datetime.timedelta(days=1)
+            week_start  = prev_settle   # 結算日當天即屬新週
         except Exception:
             week_start = today - datetime.timedelta(days=today.weekday())
     else:
@@ -1180,8 +1248,8 @@ async def api_force_snapshot(series: str = ""):
         _snapshot_taken_today[series] = today
     logger.info(f"[force-snapshot] 強制重建 {fname}，{len(result['strikes'])} 個履約價，raw_calls={len(raw_calls)}, raw_puts={len(raw_puts)}")
 
-    # 結算日額外存當週全日盤累積
-    if 'N' in series and _settlement_dates.get(series, "") == today:
+    # 全日盤系列：每天都存當週累積快照
+    if 'N' in series:
         _try_save_weekly_snapshot(series, today, result["strikes"], result["pnl"])
 
     return {"ok": True, "filename": fname, "strikes_count": len(result["strikes"])}

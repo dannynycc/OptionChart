@@ -1,5 +1,23 @@
 # Changelog
 
+## v5.3 (2026-04-08)
+
+### 盤中快照補存 + 14:35 重整 + quote_poll 完整欄位 + UI 修正
+
+#### 後端：資料完整性
+- **盤中快照重啟補存**：server 重啟後 60 秒檢查最近一次 intraday 快照時間，若間隔 > 30 分鐘且在交易時段，立即補存（使用真實時間，不偽造）
+- **14:35 stores 自動重整**：配合 XQFAP 每日 14:35 資料重整，清空所有 OptionData 的成交欄位（trade_volume/inout_ratio/avg_price/bid/ask/last），保留合約結構
+- **quote_poll 讀完整 6 欄位**：從原本只讀 Bid/Ask/Price，改為同時讀 TotalVolume/InOutRatio/AvgPrice，不再依賴 advise callback 推送成交量（修復夜盤成交量顯示不出來的問題）
+
+#### 後端：快照邏輯調整
+- **每天都存 weekly_sum**：weekly_sum 不再限定結算日才存，每天 13:45 都存當週累積快照
+- **week_start 改為結算日當天**：`prev_settle + 1` → `prev_settle`，結算日的資料歸入新週（04W1 結算日的 04F2 資料屬於 04F2 新週）
+- **快照列表排序修正**：`/api/snapshots` 統一按 date + time 排序，13:45 收盤快照落在當天 intraday 最後
+
+#### 前端 UI
+- **快照 → 即時切換修復**：選 weekly_sum（無 table）後清空 table DOM 和 `_rowMap`，切回即時時主動 fetch `/api/data` 重建 table（不依賴 WS 推送）
+- **Toolbar 一行排版**：toolbar-item 加 `white-space: nowrap`，status-bar 加 `flex-shrink: 0`，隱藏「已連線」假狀態和「複製表格」按鈕，gap/padding 縮小適應 150% DPI
+
 ## v5.2 (2026-04-08)
 
 ### 損益視圖左右分類 + 夜盤後半修正

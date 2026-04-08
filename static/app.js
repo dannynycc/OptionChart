@@ -84,11 +84,15 @@ function _clearHover() {
 }
 
 chart.getZr().on('mousemove', function(e) {
+  const px = [e.offsetX, e.offsetY];
+  if (chart.containPixel('grid', px)) {
+    chart.getZr().setCursorStyle(_dragging ? 'grabbing' : 'grab');
+  }
+  if (_dragging) return;
   if (_hoverRaf) return;
   _hoverRaf = true;
   requestAnimationFrame(() => { _hoverRaf = false; });
 
-  const px = [e.offsetX, e.offsetY];
   if (!chart.containPixel('grid', px) || _chartStrikes.length === 0) {
     _mouseStrike = null;
     _clearHover(); return;
@@ -138,6 +142,51 @@ chart.getZr().on('mousemove', function(e) {
 });
 
 chart.getZr().on('mouseout', () => { _mouseStrike = null; _clearHover(); });
+
+// ── 滑鼠拖曳平移（地圖模式：往右拖看左邊資料） ──────────
+let _dragging = false;
+let _dragStartX = 0;
+let _dragStartMin = 0;
+let _dragStartMax = 0;
+
+chartDom.addEventListener('mousedown', function(e) {
+  if (e.button !== 0 || !_nouiSlider || _chartStrikes.length === 0) return;
+  const [curMin, curMax] = _nouiSlider.get().map(Number);
+  if (curMax - curMin >= Math.max(..._chartStrikes) - Math.min(..._chartStrikes)) return;
+  _dragging = true;
+  _dragStartX = e.clientX;
+  _dragStartMin = curMin;
+  _dragStartMax = curMax;
+  chart.getZr().setCursorStyle('grabbing');
+  chartDom.style.cursor = 'grabbing';
+  _clearHover();
+});
+
+document.addEventListener('mousemove', function(e) {
+  if (!_dragging) return;
+  chart.getZr().setCursorStyle('grabbing');
+  chartDom.style.cursor = 'grabbing';
+  const gridLeft = _GRID.left;
+  const gridRight = chartDom.offsetWidth - _GRID.right;
+  const gridWidth = gridRight - gridLeft;
+  if (gridWidth <= 0) return;
+  const range = _dragStartMax - _dragStartMin;
+  const dx = e.clientX - _dragStartX;
+  const dataShift = (dx / gridWidth) * range;
+  const fullMin = Math.min(..._chartStrikes);
+  const fullMax = Math.max(..._chartStrikes);
+  let newMin = _dragStartMin - dataShift;
+  let newMax = _dragStartMax - dataShift;
+  if (newMin < fullMin) { newMin = fullMin; newMax = fullMin + range; }
+  if (newMax > fullMax) { newMax = fullMax; newMin = fullMax - range; }
+  _nouiSlider.set([newMin, newMax]);
+});
+
+document.addEventListener('mouseup', function() {
+  if (!_dragging) return;
+  _dragging = false;
+  chartDom.style.cursor = '';
+});
 
 // ── 滑鼠滾輪縮放（調整 noUiSlider X 軸範圍） ──────────
 chartDom.addEventListener('wheel', function(e) {
@@ -1178,6 +1227,7 @@ async function _loadSnapshot(filename) {
       ? `${snap.date} 13:45:00`
       : `${snap.date} ${snap.time.slice(0,2)}:${snap.time.slice(2)}:00`;
     if (snap.table) { _tableScrolled = false; updateTable(snap.table); }
+    else { const _b = document.getElementById('strike-table-body'); _b.replaceChildren(); _b._rowMap = {}; }
     if (snap.atm_strike) updateATMLine(snap.atm_strike);
     if (snap.implied_forward != null) { _impliedForward = snap.implied_forward; _updatePnlStats(); }
     updateChart({ strikes: snap.strikes, pnl: snap.pnl }, true);
@@ -1222,6 +1272,18 @@ document.getElementById('view-intraday').addEventListener('change', async functi
       btnFull.classList.toggle('active', _currentSessionMode === 'full');
       btnDay.classList.toggle('active',  _currentSessionMode === 'day');
     }
+    // 主動 fetch 一次，避免收盤後無 WS 推送導致 table/chart 空白
+    try {
+      const r = await fetch('/api/data');
+      if (r.ok) {
+        const d = await r.json();
+        updateTable(d.table);
+        _lastLivePnl = d.pnl;
+        updateChart(d.pnl, true);
+        if (d.atm_strike) updateATMLine(d.atm_strike);
+        if (d.implied_forward != null) { _impliedForward = d.implied_forward; _updatePnlStats(); }
+      }
+    } catch {}
   } else if (val.startsWith('snapshot:')) {
     await _loadSnapshot(val.slice('snapshot:'.length));
   }
@@ -1241,6 +1303,8 @@ document.getElementById('view-weekly').addEventListener('change', async function
     const c   = _contractsData[parseInt(sel.value)];
     if (!c) return;
     await _loadWeeklyBaseline(c.series, c.settlement_date);
+    // 確保 table 有資料（收盤後無 WS 推送時需要主動 fetch）
+    try { const r = await fetch('/api/data'); if (r.ok) { const d = await r.json(); updateTable(d.table); _lastLivePnl = d.pnl; } } catch {}
     if (_lastLivePnl) updateChart(_mergeWithLive(_lastLivePnl), true);
   } else if (val.startsWith('snapshot:')) {
     await _loadSnapshot(val.slice('snapshot:'.length));

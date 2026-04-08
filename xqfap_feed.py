@@ -728,7 +728,11 @@ def _quote_poll_worker():
         bid  = _to_float(_req_thread(f"{symbol}.TF-Bid"))
         ask  = _to_float(_req_thread(f"{symbol}.TF-Ask"))
         last = _to_float(_req_thread(f"{symbol}.TF-Price"))
-        return symbol, bid, ask, last
+        vol_str = _req_thread(f"{symbol}.TF-TotalVolume")
+        vol  = int(float(vol_str)) if vol_str and vol_str != '-' else 0
+        ratio = _to_float(_req_thread(f"{symbol}.TF-InOutRatio"))
+        avg  = _to_float(_req_thread(f"{symbol}.TF-AvgPrice"))
+        return symbol, bid, ask, last, vol, ratio, avg
 
     with ThreadPoolExecutor(max_workers=_QUOTE_POLL_THREADS,
                             thread_name_prefix='quote_req') as executor:
@@ -748,15 +752,22 @@ def _quote_poll_worker():
             changed = []
             for fut in as_completed(futures):
                 try:
-                    symbol, bid, ask, last = fut.result()
+                    symbol, bid, ask, last, vol, ratio, avg = fut.result()
                 except Exception:
                     continue
                 prev = _quote_prevs.get(symbol)
-                if prev and prev == (bid, ask, last):
+                cur = (bid, ask, last, vol, ratio, avg)
+                if prev and prev == cur:
                     continue
-                _quote_prevs[symbol] = (bid, ask, last)
-                changed.append({'symbol': symbol, 'trade_volume': 0,
-                                 'bid_price': bid, 'ask_price': ask, 'last_price': last})
+                _quote_prevs[symbol] = cur
+                item = {'symbol': symbol, 'bid_price': bid, 'ask_price': ask, 'last_price': last}
+                if vol > 0:
+                    item['trade_volume'] = vol
+                    item['inout_ratio']  = ratio
+                    item['avg_price']    = avg
+                else:
+                    item['trade_volume'] = 0
+                changed.append(item)
 
             elapsed = time.time() - t0
             logger.info(f"[quote_poll] {len(symbols)} 合約，{len(changed)} 筆變化，耗時 {elapsed*1000:.0f}ms")

@@ -47,16 +47,15 @@
     <span class="label">期交所代號</span>
     <span id="series-code">--</span>
   </div>
-  <div class="toolbar-item">
+  <div class="toolbar-item" style="display:none">
     <button id="btn-copy-table" class="toggle-btn" title="複製 T 字表為 TSV，可直接貼到 Excel">複製表格</button>
   </div>
-  <!-- 狀態列移到工具列右側 -->
   <div id="status-bar">
-    <span id="conn-dot" class="dot dot-gray"></span>
-    <span id="conn-label">連線中...</span>
-    &nbsp;｜&nbsp;
     <span id="sub-count">--</span> 個履約價
   </div>
+  <!-- hidden: 保留 DOM 節點供 JS 寫入，但不顯示 -->
+  <span id="conn-dot" class="dot" style="display:none"></span>
+  <span id="conn-label" style="display:none"></span>
 </header>
 
 <!-- ── 主體 ── -->
