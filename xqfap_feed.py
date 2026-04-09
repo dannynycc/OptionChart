@@ -203,8 +203,10 @@ def _advise_cb_fn(wType, uFmt, hconv, hsz1, hsz2, hdata, dw1, dw2):
         new_vol = int(float(val_str))
     except (ValueError, TypeError):
         return _DDE_FACK
-    global _last_callback_time
-    _last_callback_time = time.time()
+    global _last_callback_time, _last_callback_by_symbol
+    _now_ts = time.time()
+    _last_callback_time = _now_ts
+    _last_callback_by_symbol[symbol] = _now_ts
     series = _sym_to_series.get(symbol)
     if series:
         try:
@@ -223,7 +225,8 @@ _sym_to_series: dict  = {}   # full-series symbol → series（e.g. 'TXYN03C3300
 _advise_loop_tid      = 0    # Win32 thread ID of advise message loop
 _pending_subscribe: set = set()  # 用 set 去重，避免重複 ADVSTART
 _pending_subscribe_lock   = threading.Lock()
-_last_callback_time: float = 0.0   # 最後收到 ADVDATA 的時間
+_last_callback_time: float = 0.0   # 最後收到 ADVDATA 的時間（全域）
+_last_callback_by_symbol: dict = {}  # symbol → 最後 callback 時間（觀測 partial failure 用）
 _quote_prevs: dict = {}            # symbol → (bid, ask, last)，供 quote_poll_worker 去重
 _last_resubscribe_time: float = 0.0  # 最後重新訂閱的時間
 _active_advise_series: str  = ''     # 目前持有 advise 的 full series
@@ -1145,8 +1148,14 @@ def _advise_loop():
             elapsed = time.time() - _last_callback_time
             if _last_callback_time > 0 and elapsed > _WATCHDOG_THRESHOLD:
                 _now_t = datetime.datetime.now().time()
-                # 盤後（14:30~08:30）DDEML 本就不推 callback，跳過 watchdog 重連
-                _after_market = _now_t >= datetime.time(14, 30) or _now_t < datetime.time(8, 30)
+                # 真正的盤後空窗（DDEML 本就不推 callback），只涵蓋兩個空窗：
+                #   14:30~15:00  日盤收盤到夜盤開盤
+                #   05:00~08:45  夜盤收盤到日盤開盤
+                # 夜盤（15:00~05:00）與日盤（08:45~13:45）期間必須觸發重連。
+                _after_market = (
+                    (datetime.time(14, 30) <= _now_t < datetime.time(15, 0)) or
+                    (datetime.time(5, 0)   <= _now_t < datetime.time(8, 45))
+                )
                 if _after_market:
                     pass  # 盤後靜默，不重連不重 init
                 else:
@@ -1185,10 +1194,18 @@ def _advise_loop():
 
         hb_tick += 1
         if hb_tick % 600 == 0:
-            elapsed_since_cb = time.time() - _last_callback_time
+            _now_hb = time.time()
+            elapsed_since_cb = _now_hb - _last_callback_time
             total = sum(len(v) for v in _all_prevs.values())
+            # per-symbol 新鮮度：active series 中有多少 symbol 在最近 5 分鐘收過 callback
+            active_syms = list(_all_metas.get(_active_advise_series, {}).keys())
+            fresh_cutoff = _now_hb - 300
+            fresh_count  = sum(1 for s in active_syms
+                               if _last_callback_by_symbol.get(s, 0) > fresh_cutoff)
             logger.info(f"heartbeat: {[f'{s}={len(m)}' for s, m in _all_metas.items()]} "
-                        f"prev={total} last_cb={elapsed_since_cb:.0f}s ago")
+                        f"prev={total} last_cb={elapsed_since_cb:.0f}s ago "
+                        f"active={_active_advise_series} "
+                        f"fresh={fresh_count}/{len(active_syms)}")
 
         _user32.TranslateMessage(ctypes.byref(msg))
         _user32.DispatchMessageW(ctypes.byref(msg))

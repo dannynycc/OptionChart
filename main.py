@@ -64,6 +64,11 @@ _INTRADAY_DIR         = os.path.join(_ROOT_DIR, 'snapshots', 'intraday')
 _PRICE_LOG_DIR        = os.path.join(_ROOT_DIR, 'monitor')
 _snapshot_taken_today: dict[str, str] = {}  # series → date_str（已存快照的日期，防重複）
 
+# ── 後端 feed-watchdog（Phase 3：獨立於前端的 staleness 補救）──────
+_FEED_STALE_THRESHOLD   = 90.0   # 秒。active series 的 _last_updated 多久未更新視為凍結
+_FEED_RESTART_COOLDOWN  = 180.0  # 秒。連續重啟之間最短間隔，避免重啟風暴
+_last_feed_restart_at:  float = 0.0  # 最後一次觸發 feed 重啟的 unix 秒
+
 def _is_day_series(series: str) -> bool:
     return 'N' not in series
 
@@ -663,6 +668,40 @@ async def _periodic_broadcast():
             # 每 10 秒檢查一次快照觸發（防止 13:45 後資料靜止導致 api_feed 漏觸發）
             for series in list(stores.keys()):
                 _try_save_snapshot(series)
+            # ── 後端 feed-watchdog：active_full 凍結偵測 ──
+            # Phase 3：把原本前端 setInterval 的補救邏輯搬到後端，
+            # 讓 headless 運作（不開瀏覽器）也能自動恢復凍結的 feed。
+            global _last_feed_restart_at
+            if _is_trading_hours() and _active_full and not _is_day_series(_active_full):
+                _sd_check = _settlement_dates.get(_active_full, "")
+                _today_str = now.date().isoformat()
+                _now_t_ck = now.time()
+                _settled_ck = bool(_sd_check and _sd_check <= _today_str
+                                   and _now_t_ck >= datetime.time(13, 45))
+                if not _settled_ck:
+                    _last_ts = _last_updated.get(_active_full, 0.0)
+                    if _last_ts > 0:
+                        _staleness = time.time() - _last_ts
+                        if _staleness > _FEED_STALE_THRESHOLD:
+                            _now_now = time.time()
+                            if _now_now - _last_feed_restart_at > _FEED_RESTART_COOLDOWN:
+                                _last_feed_restart_at = _now_now
+                                logger.warning(
+                                    f"[feed-watchdog] {_active_full} 資料凍結 "
+                                    f"{_staleness:.0f}s（>{_FEED_STALE_THRESHOLD:.0f}s），"
+                                    f"觸發 _do_restart_feed()"
+                                )
+                                try:
+                                    _do_restart_feed()
+                                except Exception as e:
+                                    logger.error(f"[feed-watchdog] restart failed: {e}")
+                            else:
+                                _wait_left = _FEED_RESTART_COOLDOWN - (_now_now - _last_feed_restart_at)
+                                if tick % 30 == 0:
+                                    logger.info(
+                                        f"[feed-watchdog] {_active_full} 凍結 {_staleness:.0f}s，"
+                                        f"cooldown 等待 {_wait_left:.0f}s"
+                                    )
         if clients and stores:
             try:
                 _last_payload = compute_payload()
@@ -1255,12 +1294,13 @@ async def api_force_snapshot(series: str = ""):
     return {"ok": True, "filename": fname, "strikes_count": len(result["strikes"])}
 
 
-@app.post("/api/restart-feed")
-async def restart_feed():
-    """終止舊 xqfap_feed.py（依 xqfap.pid）並重新啟動。"""
+def _do_restart_feed():
+    """
+    終止舊 xqfap_feed.py（依 xqfap.pid）並重新啟動。
+    供 /api/restart-feed 與後端 feed-watchdog 共用（不依賴 HTTP / 前端）。
+    """
     base = os.path.dirname(os.path.abspath(__file__))
     pid_file = os.path.join(base, 'monitor', 'xqfap.pid')
-    # 終止舊 process
     try:
         with open(pid_file) as f:
             old_pid = int(f.read().strip())
@@ -1269,7 +1309,6 @@ async def restart_feed():
         logger.info(f"restart-feed: 已終止 pid={old_pid}")
     except Exception as e:
         logger.warning(f"restart-feed: 終止舊 process 失敗（{e}），繼續啟動新的")
-    # 啟動新 process，stdout/stderr 導向 logs/xqfap.log
     log_path = os.path.join(base, 'monitor', 'xqfap.log')
     with open(log_path, 'a', encoding='utf-8') as log_file:
         subprocess.Popen(
@@ -1280,6 +1319,12 @@ async def restart_feed():
             creationflags=subprocess.CREATE_NO_WINDOW,
         )
     logger.info("restart-feed: 已啟動新 xqfap_feed.py")
+
+
+@app.post("/api/restart-feed")
+async def restart_feed():
+    """前端或外部 trigger 重啟 xqfap_feed.py。實作見 _do_restart_feed()。"""
+    _do_restart_feed()
     return {"status": "restarting"}
 
 # ── WebSocket 端點 ────────────────────────────────────────────

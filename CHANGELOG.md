@@ -1,5 +1,40 @@
 # Changelog
 
+## v5.4 (2026-04-09)
+
+### Headless 自動補救：把 server 健康機制從前端搬到後端
+
+#### 背景
+2026-04-09 16:00~17:30 用戶 headless 運作（關掉瀏覽器讓 server 自己錄資料）期間，所有 series 的 intraday 快照 pnl/raw_calls/raw_puts 完全凍結。事後追查發現：唯一真正在做「偵測 feed 凍結 → 自動 POST /api/restart-feed 補救」的機制竟然寫在 `static/app.js:1007-1053` 的瀏覽器 setInterval 裡。瀏覽器一關 → setInterval 不執行 → 沒有任何自動恢復。這個架構錯誤在開發期間完全不會被發現（開發者開著瀏覽器 debug 一切正常），只有 headless 跑才暴露。
+
+#### 後端：feed-watchdog（核心修復）
+- **新增 `_do_restart_feed()` helper**（main.py）：把 `/api/restart-feed` endpoint 的 kill+respawn 邏輯抽出成內部函式，供後端排程直接呼叫，不再需要繞 HTTP 自己叫自己
+- **`_periodic_broadcast()` 加每 10 秒 staleness 檢查**：用既有的 `_last_updated[active_full]` 做 per-series 時間戳判斷，過 90 秒（`_FEED_STALE_THRESHOLD`）就直接呼叫 `_do_restart_feed()`，受 180 秒（`_FEED_RESTART_COOLDOWN`）保護避免風暴
+- **守門條件**：必須 `_is_trading_hours()` 為真、active_full 存在且非日盤系列、非結算後 13:45 凍住的合約，避免日夜盤空窗或結算後誤觸發
+- **前端 `static/app.js` 移除 `fetch('/api/restart-feed')`**：toast 顯示保留（給有開瀏覽器的人看），但自動重啟邏輯只剩後端一條路徑，避免雙觸發
+
+#### 後端：xqfap_feed.py watchdog 兩個 bug
+- **時段 gate 寫錯**（`xqfap_feed.py:1149`）：原本 `_after_market = _now_t >= 14:30 or _now_t < 08:30` 把整個夜盤（15:00~05:00）都當盤後，watchdog 完全不重連。改成只 cover **14:30~15:00**（日盤收盤到夜盤開盤）和 **05:00~08:45**（夜盤收盤到日盤開盤）兩個真實空窗
+- **per-symbol 觀測**：新增 `_last_callback_by_symbol: dict`，`_advise_cb_fn` 收到任何 callback 時同步寫入；advise loop heartbeat log 加 `active=<series> fresh=N/M` 欄位，方便事後看到底是哪些合約 callback 漏接（partial failure 觀測，不直接觸發重連——避免無交易合約的 false positive）
+
+#### 工具：stop.bat 精準 kill
+- **問題**：原 stop.bat 用 `taskkill /F /IM python.exe` 會誤殺系統上所有 python（pyright langserver、jupyter、用戶其他 script）
+- **新版**：stop.bat 改成呼叫 `scripts/stop.py`（跟 start.bat → scripts/start.py 對稱），透過 powershell `Get-WmiObject Win32_Process` 只 kill commandline 含 `xqfap_feed.py` / `uvicorn main:app` / `scripts.start.py` 的 python，並順便清掉 `monitor/xqfap.pid`
+
+#### 待追的 root cause（不阻斷，已有 Phase 3 watchdog 補救）
+驗證期間意外發現：`_quote_poll_worker` 在 19:03:47 重啟後跑了 1 次成功（`298 合約，298 筆變化，1969ms`），之後 96 秒**完全沒有任何 quote_poll log**，直到 feed-watchdog 在 19:05:23 偵測 `_last_updated[TXVN04]` 凍結 96s 並強制重啟才恢復。quote_poll 是「取代 ADVISE 觸發成交量更新」的補救機制，它一卡死整個 TotalVolume 就不更新，看起來就像 ADVISE 漏接。**目前由 Phase 3 watchdog 自動補救（90s 偵測 + 重啟），不是阻斷性問題，但 root cause 沒解決**。下個 session 應追：(a)`_req_thread` DDE 同步呼叫 timeout，(b)`ThreadPoolExecutor` 卡住，(c)DDE 連線在重啟後第一次 quote_poll 完就斷了
+
+#### 驗證
+五輪 iteration debug 全通過：
+1. 重啟後 HTTP/連線/資料流 ✓
+2. heartbeat 新欄位 + watchdog 不誤觸發 ✓
+3. **真實情境**：quote_poll 19:03:47 自己卡死 → 19:05:23 後端 watchdog 96s 偵測自動補救 ✓
+4. 60 秒持續觀察 quote_poll 穩定 ✓
+5. 主動 kill xqfap pid → 95s 後 watchdog 自動補救 ✓
+6. 端對端 1930 intraday snapshot 全 series DIFF（TXVN04 sum_abs_pos: 5677→8611→9307；TXON04: 1224→1592→1731；TXXN04: 0→104→107；TX4N04: 28→...→158）
+
+---
+
 ## v5.3 (2026-04-08)
 
 ### 盤中快照補存 + 14:35 重整 + quote_poll 完整欄位 + UI 修正

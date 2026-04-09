@@ -1034,16 +1034,9 @@ setInterval(() => {
     if (!_feedToast._manualDismiss) {
       const m = Math.floor(ago / 60), s = ago % 60;
       const agoStr = `${m > 0 ? m + 'm ' : ''}${s}s`;
-
-      // 自動重啟（cooldown 內不重複觸發）
-      if (now - _lastRestartAt > _RESTART_COOLDOWN) {
-        _lastRestartAt = now;
-        _feedDeadMsg.textContent = `xqfap 停止 ${agoStr}　重啟中...`;
-        fetch('/api/restart-feed', { method: 'POST' }).catch(() => {});
-      } else {
-        const wait = Math.round(_RESTART_COOLDOWN - (now - _lastRestartAt));
-        _feedDeadMsg.textContent = `xqfap 停止 ${agoStr}　重啟後等待中 (${wait}s)`;
-      }
+      // Phase 3 改動：自動重啟邏輯已搬到後端 main.py:_periodic_broadcast
+      // 的 feed-watchdog（不依賴瀏覽器開著）。前端只負責顯示提示。
+      _feedDeadMsg.textContent = `xqfap 停止 ${agoStr}　後端 watchdog 處理中...`;
       _feedToast.classList.add('visible');
     }
   } else {
