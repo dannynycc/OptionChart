@@ -28,6 +28,7 @@ import threading
 import datetime
 import queue
 import atexit
+import traceback
 import ctypes.wintypes
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -750,56 +751,58 @@ def _quote_poll_worker():
                 time.sleep(0.05)
                 continue
 
-            t0 = time.time()
-            futures = {executor.submit(_fetch_quote, sym): sym for sym in symbols}
-            changed = []
-            for fut in as_completed(futures):
-                try:
-                    symbol, bid, ask, last, vol, ratio, avg = fut.result()
-                except Exception:
-                    continue
-                prev = _quote_prevs.get(symbol)
-                cur = (bid, ask, last, vol, ratio, avg)
-                if prev and prev == cur:
-                    continue
-                _quote_prevs[symbol] = cur
-                item = {'symbol': symbol, 'bid_price': bid, 'ask_price': ask, 'last_price': last}
-                if vol > 0:
-                    item['trade_volume'] = vol
-                    item['inout_ratio']  = ratio
-                    item['avg_price']    = avg
-                else:
-                    item['trade_volume'] = 0
-                changed.append(item)
+            try:
+                t0 = time.time()
+                futures = {executor.submit(_fetch_quote, sym): sym for sym in symbols}
+                changed = []
+                for fut in as_completed(futures):
+                    try:
+                        symbol, bid, ask, last, vol, ratio, avg = fut.result()
+                    except Exception:
+                        continue
+                    prev = _quote_prevs.get(symbol)
+                    cur = (bid, ask, last, vol, ratio, avg)
+                    if prev and prev == cur:
+                        continue
+                    _quote_prevs[symbol] = cur
+                    item = {'symbol': symbol, 'bid_price': bid, 'ask_price': ask, 'last_price': last}
+                    if vol > 0:
+                        item['trade_volume'] = vol
+                        item['inout_ratio']  = ratio
+                        item['avg_price']    = avg
+                    else:
+                        item['trade_volume'] = 0
+                    changed.append(item)
 
-            elapsed = time.time() - t0
-            logger.info(f"[quote_poll] {len(symbols)} 合約，{len(changed)} 筆變化，耗時 {elapsed*1000:.0f}ms")
-            if changed:
-                _post_feed(changed, series)
-                # 08:45~13:45 日盤時間內：bid/ask/last 三欄位完全 mirror 到 day series
-                # 13:45 後停止：XQFAP 重整後 TX1N04 進入夜盤，兩邊各自獨立，不再 mirror
-                day_series = series.replace('N', '')
-                _now = datetime.datetime.now().time()
-                if (day_series != series and day_series in _all_metas
-                        and datetime.time(8, 45) <= _now <= datetime.time(13, 45)):
-                    day_meta    = _all_metas[day_series]
-                    day_changed = []
-                    for item in changed:
-                        day_sym = item['symbol'].replace(series, day_series, 1)
-                        if day_sym in day_meta:
-                            day_changed.append({
-                                'symbol':       day_sym,
-                                'trade_volume': 0,
-                                'bid_price':    item['bid_price'],
-                                'ask_price':    item['ask_price'],
-                                'last_price':   item['last_price'],
-                            })
-                    if day_changed:
-                        logger.info(f"[mirror] {day_series} {len(day_changed)} 筆 bid/ask/last")
-                        _post_feed(day_changed, day_series)
-                else:
-                    logger.debug(f"[mirror] skip: day_series={day_series!r} in_metas={day_series in _all_metas}")
-            _push_futures_price()
+                elapsed = time.time() - t0
+                logger.info(f"[quote_poll] {len(symbols)} 合約，{len(changed)} 筆變化，耗時 {elapsed*1000:.0f}ms")
+                if changed:
+                    _post_feed(changed, series)
+                    day_series = series.replace('N', '')
+                    _now = datetime.datetime.now().time()
+                    if (day_series != series and day_series in _all_metas
+                            and datetime.time(8, 45) <= _now <= datetime.time(13, 45)):
+                        day_meta    = _all_metas[day_series]
+                        day_changed = []
+                        for item in changed:
+                            day_sym = item['symbol'].replace(series, day_series, 1)
+                            if day_sym in day_meta:
+                                day_changed.append({
+                                    'symbol':       day_sym,
+                                    'trade_volume': 0,
+                                    'bid_price':    item['bid_price'],
+                                    'ask_price':    item['ask_price'],
+                                    'last_price':   item['last_price'],
+                                })
+                        if day_changed:
+                            logger.info(f"[mirror] {day_series} {len(day_changed)} 筆 bid/ask/last")
+                            _post_feed(day_changed, day_series)
+                    else:
+                        logger.debug(f"[mirror] skip: day_series={day_series!r} in_metas={day_series in _all_metas}")
+                _push_futures_price()
+            except Exception:
+                logger.error(f"[quote_poll] 未預期例外，1 秒後重試：\n{traceback.format_exc()}")
+                time.sleep(1)
 
 
 def _bulk_request_series(full_series: str):

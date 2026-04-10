@@ -1,5 +1,22 @@
 # Changelog
 
+## v5.4.1 (2026-04-10)
+
+### quote_poll 防禦性修復 + log 保全
+
+#### 背景
+v5.4 的 feed-watchdog 驗證期間意外發現 `_quote_poll_worker` 在 19:03:47 跑完一次後 96 秒完全卡死，是 watchdog 第一次真實觸發的原因。完整診斷寫在 `test/QUOTE_POLL_HANG_DIAGNOSIS.md`，兩個假設（H1 DDE backpressure / H2 silent thread death）都用 mock 重現成功。
+
+#### 修復
+- **B1：log 不再 truncate**（`scripts/start.py`）：uvicorn + xqfap 的 stdout/stderr log 從 `'w'` 改 `'a'` append mode。之前每次重啟都會清掉 log，導致 freeze 期間的 stderr traceback 永久丟失，無法事後確認 root cause
+- **B2：quote_poll outer try/except**（`xqfap_feed.py`）：`_quote_poll_worker` 的 while True loop body 包入 try/except，捕獲所有未預期例外、log 完整 traceback（`traceback.format_exc()`）、sleep 1s 後 continue。防止 H2（silent thread death），同時為未來的 freeze 事件提供 root cause 線索
+
+#### 診斷工具（test/ 目錄）
+- **`test/QUOTE_POLL_HANG_DIAGNOSIS.md`**：完整 call chain 地圖、4 個假設排名、5 個 Fix 方向、mock 測試結論、推薦上線順序
+- **`test/test_quote_poll_hang_repro.py`**：self-contained mock 重現腳本，驗證 H1（iter 2 卡 24s = 96/24 × 6 × 1s）和 H2（thread silent death），以及 Fix A 對兩者的效果
+
+---
+
 ## v5.4 (2026-04-09)
 
 ### Headless 自動補救：把 server 健康機制從前端搬到後端

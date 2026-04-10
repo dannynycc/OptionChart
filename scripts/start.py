@@ -56,8 +56,8 @@ def xqfap_alive() -> bool:
 def start_uvicorn():
     print("[uvicorn] starting...")
     os.makedirs(MONITOR, exist_ok=True)
-    out = open(os.path.join(MONITOR, 'uvicorn.log'), 'w')
-    err = open(os.path.join(MONITOR, 'uvicorn_err.log'), 'w')
+    out = open(os.path.join(MONITOR, 'uvicorn.log'), 'a')
+    err = open(os.path.join(MONITOR, 'uvicorn_err.log'), 'a')
     subprocess.Popen(
         [sys.executable, '-m', 'uvicorn', 'main:app', '--host', '0.0.0.0', '--port', '8000',
          '--no-access-log'],
@@ -69,8 +69,8 @@ def start_uvicorn():
 def start_xqfap():
     print("[xqfap ] starting...")
     os.makedirs(MONITOR, exist_ok=True)
-    out = open(os.path.join(MONITOR, 'xqfap.log'), 'w')
-    err = open(os.path.join(MONITOR, 'xqfap_err.log'), 'w')
+    out = open(os.path.join(MONITOR, 'xqfap.log'), 'a')
+    err = open(os.path.join(MONITOR, 'xqfap_err.log'), 'a')
     subprocess.Popen(
         [sys.executable, 'xqfap_feed.py'],
         cwd=ROOT, stdout=out, stderr=err,
